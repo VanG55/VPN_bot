@@ -1,33 +1,42 @@
 import os
 from typing import List, Dict
 
-# Payment Configuration
+# Bot Configuration
+TOKEN = os.getenv('BOT_TOKEN', '7212816626:AAEbnxhIOSAgx8AZdj0_PZbBsfXiFkpkjls')
+DB_NAME = os.getenv('DB_NAME', 'vpn_bot.db')
+BOT_USERNAME = "VangVPN_bot"
+
+# Marzban Configuration
+MARZBAN_HOST = os.getenv('MARZBAN_HOST', 'http://150.241.108.35:7575')
+MARZBAN_USERNAME = os.getenv('MARZBAN_USERNAME', 'admin')
+MARZBAN_PASSWORD = os.getenv('MARZBAN_PASSWORD', 'JmnutmenfBp7')
+MARZBAN_PROTOCOLS = {
+    "IOS": {"vmess": True, "vless": True, "trojan": False, "shadowsocks": False},
+    "Android": {"vmess": True, "vless": True, "trojan": True, "shadowsocks": True},
+    "Windows": {"vmess": True, "vless": True, "trojan": True, "shadowsocks": True},
+    "MacOS": {"vmess": True, "vless": True, "trojan": False, "shadowsocks": False},
+    "Linux": {"vmess": True, "vless": True, "trojan": True, "shadowsocks": True}
+}
+
+# YooKassa Configuration
 YOOKASSA_ACCOUNT_ID = '490714'
 YOOKASSA_SECRET_KEY = 'live_bU6jpk2314izChK8KdS1TAm6tuWQj7ywYbGLau5ab64'
 
-# Bot Configuration
-TOKEN: str = os.getenv('BOT_TOKEN', '7212816626:AAEbnxhIOSAgx8AZdj0_PZbBsfXiFkpkjls')
-DB_NAME: str = os.getenv('DB_NAME', 'vpn_bot.db')
-BOT_USERNAME = "VangVPN_bot"
+# Payment Configuration
+DEFAULT_PLAN_PRICE = float(os.getenv('DEFAULT_PLAN_PRICE', '10'))
+MIN_TOP_UP = int(os.getenv('MIN_TOP_UP', '100'))
+MAX_TOP_UP = int(os.getenv('MAX_TOP_UP', '1000'))
+TOP_UP_OPTIONS = [100, 300, 500, 1000]
 
 # Support Configuration
-SUPPORT_GROUP_ID: int = -1002228541514  # ID группы поддержки
-SUPPORT_WELCOME_MESSAGE: str = "Опишите вашу проблему или задайте вопрос. Мы постараемся ответить как можно скорее."
+SUPPORT_GROUP_ID = -1002228541514
+SUPPORT_WELCOME_MESSAGE = "Опишите вашу проблему"
 
-# URLs
-PAYMENT_URL: str = os.getenv('PAYMENT_URL', 'https://yoomoney.ru')
-
-# Device Configuration
-DEVICE_TYPES: List[str] = ["IOS", "Android", "Windows", "Linux", "MacOS"]
-
-# Payment Configuration
-DEFAULT_PLAN_PRICE: float = float(os.getenv('DEFAULT_PLAN_PRICE', '10'))
-MIN_TOP_UP: int = int(os.getenv('MIN_TOP_UP', '100'))
-MAX_TOP_UP: int = int(os.getenv('MAX_TOP_UP', '1000'))
-TOP_UP_OPTIONS: List[int] = [100, 300, 500, 1000]
+# Device Types
+DEVICE_TYPES = ["IOS", "Android", "Windows", "Linux", "MacOS"]
 
 # Message Templates
-MESSAGE_TEMPLATES: Dict[str, str] = {
+MESSAGE_TEMPLATES = {
     'welcome': """
 🏠 *Ваш личный кабинет*
 
@@ -49,16 +58,15 @@ _(для установки VPN перейдите в раздел "Мои ус�
     'top_up_info': """
 💰 *Пополнение баланса*
 
-• Пополнение баланса является однократной операцией (не подписка).
-• Мы не имеем доступа к вашим личным и платежным данным.
-• Списание средств с баланса осуществляется в момент создания конфигурации.
+- Пополнение баланса является однократной операцией (не подписка).
+- Списание средств с баланса осуществляется в момент создания конфигурации.
 
 💳 *Доступные способы оплаты:*
-• Карты РФ
-• Карты других стран
-• СБП
-• Электронные деньги
-• Онлайн-банк
+- Карты РФ
+- Карты других стран
+- СБП
+- Электронные деньги
+- Онлайн-банк
 
 Выберите сумму пополнения:
 """,
@@ -66,8 +74,5 @@ _(для установки VPN перейдите в раздел "Мои ус�
 ℹ️ *Раздел помощи*
 
 Если у вас возникли вопросы или проблемы, напишите нам, и мы постараемся помочь.
-
-Чтобы начать диалог с поддержкой, просто отправьте ваше сообщение.
-*Внимание:* Старайтесь описать проблему максимально подробно.
 """
 }

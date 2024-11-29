@@ -111,16 +111,14 @@ class CommandHandler:
                     # Проверяем существование реферера
                     referrer = self.db_manager.get_user(referrer_telegram_id)
                     if referrer:
-                        # Добавляем связь в таблицу referrals
                         success = self.db_manager.add_referral(
                             referrer_telegram_id=referrer_telegram_id,
                             referee_telegram_id=user_id
                         )
-                        logger.info(f"Added referral link: {success}")
                         if success:
                             self.bot.send_message(
                                 referrer_telegram_id,
-                                f"👥 Новый реферал присоединился к боту!"
+                                "👥 Новый реферал присоединился к боту!"
                             )
                 except Exception as e:
                     logger.error(f"Error processing referral: {e}")
@@ -130,47 +128,19 @@ class CommandHandler:
                 agreement_text = (
                     "📜 *Пользовательское соглашение*\n\n"
                     "Пользуясь данным сервисом, Вы соглашаетесь с Условиями "
-                    "Использования и Конфиденциальности.\n\n"
-                    "Для ознакомления с пользовательским соглашением перейдите "
-                    "по ссылке: [Пользовательское соглашение](https://telegra.ph/Polzovatelskoe-soglashenie-11-16-9)"
+                    "Использования и Конфиденциальности."
                 )
                 self.bot.send_message(
                     message.chat.id,
                     agreement_text,
                     parse_mode='Markdown',
-                    disable_web_page_preview=True,
                     reply_markup=self.menu_handler.create_agreement_menu()
                 )
                 return
 
-            # Проверка наличия параметров команды (deep linking)
+            # Проверяем возврат из оплаты
             if len(args) > 1 and args[1].startswith('payment_'):
-                transactions = self.db_manager.get_pending_transactions(user_id)
-                if transactions:
-                    latest_transaction = transactions[0]
-                    payment_status = self.payment_service.check_payment_status(latest_transaction.payment_id)
-                    if payment_status and payment_status.get('paid'):
-                        success_message = (
-                            "✅ Успешное пополнение\n\n"
-                            f"**Агрегатор: ЮKassa**\n\n"
-                            f"**Payment ID: {latest_transaction.payment_id}**\n\n"
-                            f"**Ваш баланс пополнен на {latest_transaction.amount:.2f} руб**\n"
-                        )
-                        user_info = self.user_service.get_user_info(user_id)
-                        success_message += f"**Текущий баланс: {user_info['balance']:.2f} руб**"
-                        self.bot.reply_to(message, success_message, parse_mode='Markdown')
-                    else:
-                        self.bot.reply_to(
-                            message,
-                            "❌ Платёж не найден или ещё не оплачен\n"
-                            "Попробуйте позже или создайте новый платёж."
-                        )
-                else:
-                    logger.warning(f"No pending transactions found for user {user_id}")
-                    self.bot.reply_to(
-                        message,
-                        "❌ Платёж не найден. Попробуйте создать новый платёж."
-                    )
+                self._handle_payment_return(user_id)
 
             # Отправка основного меню
             user_info = self.user_service.get_user_info(user.telegram_id)
@@ -184,10 +154,31 @@ class CommandHandler:
 
         except Exception as e:
             logger.error(f"Error handling start command: {e}", exc_info=True)
-            self.bot.reply_to(
-                message,
-                "Произошла ошибка. Попробуйте позже."
+            self.bot.reply_to(message, "Произошла ошибка. Попробуйте позже.")
+
+    def _handle_payment_return(self, user_id: int):
+        """Обработка возврата после оплаты."""
+        try:
+            transactions = self.db_manager.get_pending_transactions(user_id)
+            if not transactions:
+                return
+
+            latest_transaction = transactions[0]
+            payment_status = self.payment_service.check_payment_status(
+                latest_transaction.payment_id
             )
+
+            if payment_status and payment_status.get('paid'):
+                success_message = (
+                    "✅ Успешное пополнение\n\n"
+                    f"**Ваш баланс пополнен на {latest_transaction.amount:.2f} руб**\n"
+                )
+                user_info = self.user_service.get_user_info(user_id)
+                success_message += f"**Текущий баланс: {user_info['balance']:.2f} руб**"
+                self.bot.send_message(user_id, success_message, parse_mode='Markdown')
+
+        except Exception as e:
+            logger.error(f"Error handling payment return: {e}")
 
     def handle_help(self, message: Message):
         """Handle /help command."""

@@ -21,52 +21,17 @@ class NotificationService:
         }
 
     # notification_service.py
-    def check_user_devices_and_balance(self, user_id: int) -> None:
-        """Проверка и списание ежедневной платы."""
-        try:
-            user = self.db_manager.get_user(user_id)
-            if not user:
-                return
+    def check_user_devices_expiration(self, user_id: int) -> None:
+        devices = self.db_manager.get_user_devices(user_id)
+        current_time = datetime.now()
 
-            devices = self.db_manager.get_user_devices(user_id)
-            if not devices:
-                return
-
-            # Стоимость за все устройства в день
-            daily_cost = len(devices) * DEFAULT_PLAN_PRICE
-
-            # Проверяем достаточно ли баланса
-            if user.balance < daily_cost:
-                self.db_manager.deactivate_user_devices(user_id)
-                notification = (
-                    "❌ *Внимание! Конфигурации деактивированы*\n\n"
-                    f"💰 Баланс: {user.balance:.2f} руб.\n"
-                    f"💸 Требуется: {daily_cost} руб/день\n\n"
-                    "Пополните баланс и создайте новые конфигурации."
-                )
-                self.bot.send_message(user_id, notification, parse_mode='Markdown')
-                return
-
-            # Списываем ежедневную плату
-            self.db_manager.update_balance(user_id, -daily_cost)
-
-            # Считаем оставшиеся дни
-            days_left = user.balance / daily_cost
-
-            # Уведомление если осталось меньше 2 дней
-            if days_left < 2:
-                notification = (
-                    "⚠️ *Внимание! Баланс подходит к концу*\n\n"
-                    f"💰 Текущий баланс: {user.balance:.2f} руб.\n"
-                    f"📱 Количество устройств: {len(devices)}\n"
-                    f"💸 Стоимость в день: {daily_cost} руб.\n"
-                    f"⏳ Хватит на {days_left:.1f} дней\n\n"
-                    "Пополните баланс для продления работы конфигураций!"
-                )
-                self.bot.send_message(user_id, notification, parse_mode='Markdown')
-
-        except Exception as e:
-            logger.error(f"Error checking devices for user {user_id}: {e}", exc_info=True)
+        for device in devices:
+            if device.expires_at and current_time > device.expires_at:
+                try:
+                    self.marzban_service.delete_user(device.marzban_username)
+                    self.db_manager.deactivate_device(device.id)
+                except Exception as e:
+                    self.logger.error(f"Error deactivating expired device: {e}")
 
     def check_all_users_devices_and_balance(self) -> None:
         """Проверка всех пользователей."""
@@ -111,3 +76,67 @@ class NotificationService:
             self._stop_flag.set()
             self._scheduler_thread.join(timeout=5)
             logger.info("Balance check scheduler stopped")
+
+    def check_marzban_configs(self):
+        """Проверка состояния конфигураций в Marzban."""
+        try:
+            devices = self.db_manager.get_all_active_devices()
+            for device in devices:
+                config = self.marzban.get_user_config(device.marzban_username)
+                if not config or config.get('status') == 'disabled':
+                    self.db_manager.deactivate_device(device.id)
+                    self.bot.send_message(
+                        device.telegram_id,
+                        f"❌ Ваша конфигурация {device.device_type} была деактивирована.\n"
+                        "Пожалуйста, создайте новую."
+                    )
+        except Exception as e:
+            self.logger.error(f"Error checking Marzban configs: {e}")
+
+    def check_device_expiration(self):
+        """Проверка истечения срока устройств."""
+        try:
+            current_time = datetime.now()
+            devices = self.db_manager.get_all_active_devices()
+
+            for device in devices:
+                if device.expires_at and current_time > device.expires_at:
+                    # Деактивируем в Marzban
+                    self.marzban.delete_user(device.marzban_username)
+
+                    # Деактивируем в БД
+                    self.db_manager.deactivate_device(device.id)
+
+                    # Уведомляем пользователя
+                    message = (
+                        "⚠️ *Внимание!*\n"
+                        f"Ваше устройство {device.device_type} деактивировано "
+                        f"в связи с истечением срока действия.\n"
+                        "Для продолжения работы необходимо создать новую конфигурацию."
+                    )
+
+                    self.bot.send_message(
+                        device.telegram_id,
+                        message,
+                        parse_mode='Markdown'
+                    )
+
+                elif device.expires_at:
+                    # Проверяем, осталось ли меньше 24 часов
+                    time_left = device.expires_at - current_time
+                    if timedelta(0) <= time_left <= timedelta(days=1):
+                        message = (
+                            "⚠️ *Внимание!*\n"
+                            f"Ваше устройство {device.device_type} будет деактивировано через "
+                            f"{int(time_left.total_seconds() / 3600)} часов.\n"
+                            "Рекомендуем продлить подписку заранее."
+                        )
+
+                        self.bot.send_message(
+                            device.telegram_id,
+                            message,
+                            parse_mode='Markdown'
+                        )
+
+        except Exception as e:
+            self.logger.error(f"Error checking device expiration: {e}")

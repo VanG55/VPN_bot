@@ -102,26 +102,29 @@ class BackupService:
             return False
 
     def _get_all_configs(self) -> Dict[str, Any]:
-        """Получение всех конфигураций из базы данных."""
-        configs = {}
+        """Получение всех конфигураций."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT telegram_id, device_type, config_data 
+                    SELECT telegram_id, device_type, config_data, 
+                           marzban_username, is_active 
                     FROM devices 
                     WHERE is_active = 1
                 """)
-                for telegram_id, device_type, config_data in cursor.fetchall():
+                configs = {}
+                for row in cursor.fetchall():
+                    telegram_id = row[0]
                     if telegram_id not in configs:
                         configs[telegram_id] = []
                     configs[telegram_id].append({
-                        'device_type': device_type,
-                        'config_data': config_data
+                        'device_type': row[1],
+                        'config_data': row[2],
+                        'marzban_username': row[3]
                     })
                 return configs
         except Exception as e:
-            logger.error(f"Error getting configurations: {e}")
+            self.logger.error(f"Error getting configurations: {e}")
             return {}
 
     def _restore_configs(self, configs: Dict[str, Any]) -> None:

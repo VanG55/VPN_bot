@@ -24,12 +24,13 @@ class User:
 
 @dataclass
 class Device:
-    telegram_id: int  # Изменено с user_id
+    telegram_id: int
     device_type: str
     config_data: str
     is_active: bool = True
     created_at: datetime = datetime.now()
     expires_at: Optional[datetime] = None
+    marzban_username: str = ""
     id: Optional[int] = None
 
 @dataclass
@@ -77,12 +78,13 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY,
-    telegram_id INTEGER,  -- Связь с пользователем
+    telegram_id INTEGER,
     device_type TEXT NOT NULL,
     config_data TEXT NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
+    marzban_username TEXT,
     FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
 );
 

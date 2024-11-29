@@ -3,7 +3,8 @@ from config.settings import (
     DEVICE_TYPES,
     TOP_UP_OPTIONS,
 )
-
+from typing import List
+from database.models import Device
 
 class MenuHandler:
     @staticmethod
@@ -30,6 +31,57 @@ class MenuHandler:
         keyboard = InlineKeyboardMarkup()
         keyboard.row(InlineKeyboardButton("➕ Добавить устройство", callback_data='add_device'))
         keyboard.row(InlineKeyboardButton("🔙 Вернуться в меню", callback_data='back_to_menu'))
+        return keyboard
+
+    def create_device_info_menu(self, device_id: int) -> InlineKeyboardMarkup:
+        """Create device info menu keyboard."""
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(
+            InlineKeyboardButton(
+                "🔄 Обновить конфиг",
+                callback_data=f"refresh_config_{device_id}"
+            ),
+            InlineKeyboardButton(
+                "⏳ Продлить",
+                callback_data=f"extend_device_{device_id}"
+            )
+        )
+        keyboard.row(
+            InlineKeyboardButton(
+                "💾 Скачать конфиг",
+                callback_data=f"download_config_{device_id}"
+            )
+        )
+        keyboard.row(
+            InlineKeyboardButton(
+                "❌ Удалить",
+                callback_data=f"delete_device_{device_id}"
+            ),
+            InlineKeyboardButton(
+                "🔙 Назад",
+                callback_data="my_devices"
+            )
+        )
+        return keyboard
+
+    def create_devices_list_menu(self, devices: List[Device]) -> InlineKeyboardMarkup:
+        """Create menu with list of devices."""
+        keyboard = InlineKeyboardMarkup()
+        for device in devices:
+            keyboard.row(
+                InlineKeyboardButton(
+                    f"📱 {device.device_type}",
+                    callback_data=f"device_info_{device.id}"
+                )
+            )
+        keyboard.row(InlineKeyboardButton("➕ Добавить устройство", callback_data='add_device'))
+        keyboard.row(InlineKeyboardButton("🔙 Вернуться в меню", callback_data='back_to_menu'))
+        return keyboard
+
+    def create_my_devices_button(self) -> InlineKeyboardMarkup:
+        """Create button to return to devices menu."""
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(InlineKeyboardButton("📱 К моим устройствам", callback_data='my_devices'))
         return keyboard
 
     @staticmethod

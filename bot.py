@@ -5,6 +5,22 @@ from flask import Flask, request, jsonify
 import hmac
 import hashlib
 from yookassa import Configuration
+from services.marzban_service import MarzbanService
+from config.settings import (
+    TOKEN, DB_NAME, MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD
+)
+import schedule
+import time
+from services.device_service import DeviceService
+from config.settings import (
+    TOKEN,
+    DB_NAME,
+    MARZBAN_HOST,
+    MARZBAN_USERNAME,
+    MARZBAN_PASSWORD
+)
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Добавляем путь проекта в PYTHONPATH
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -91,10 +107,25 @@ class VPNBot:
         self.rate_limiter = RateLimiter()
         self.payment_service = PaymentService(self.db_manager)
         self.backup_service.setup_auto_cleanup(max_backups=5)
+        self.marzban_service = MarzbanService(MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD)
+        self.device_service = DeviceService(self.db_manager, self.marzban_service)
 
         # Устанавливаем payment_service для вебхук-сервера
         global payment_service
         payment_service = self.payment_service
+
+        # Инициализируем Marzban сервис
+        self.marzban_service = MarzbanService(
+            host=MARZBAN_HOST,
+            username=MARZBAN_USERNAME,
+            password=MARZBAN_PASSWORD
+        )
+
+        # Передаем marzban_service в DeviceService
+        self.device_service = DeviceService(
+            db_manager=self.db_manager,
+            marzban_service=self.marzban_service
+        )
 
         # Инициализация обработчиков
         self.command_handler = CommandHandler(self.bot, self.db_manager)
@@ -137,12 +168,35 @@ class VPNBot:
             self.command_handler.register_handlers()
             self.callback_handler.register_handlers()
 
+            # Добавляем периодические проверки
+            schedule.every(1).hours.do(
+                self.notification_service.check_device_expiration
+            )
+            schedule.every(6).hours.do(
+                self.notification_service.check_marzban_configs
+            )
+
+            # Запускаем планировщик в отдельном потоке
+            threading.Thread(
+                target=self._run_scheduler,
+                daemon=True
+            ).start()
+
             logger.info("Bot setup completed successfully")
             return True
 
         except Exception as e:
             logger.error(f"Error during bot setup: {e}")
             return False
+
+    def _run_scheduler(self):
+        """Запуск планировщика задач."""
+        while True:
+            try:
+                schedule.run_pending()
+                time.sleep(60)
+            except Exception as e:
+                logger.error(f"Scheduler error: {e}")
 
     def run(self):
         """Запуск бота."""

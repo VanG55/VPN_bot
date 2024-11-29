@@ -63,7 +63,6 @@ class DatabaseManager:
                       user.last_name, 50.0))  # Устанавливаем начальный баланс 50 рублей
 
     def get_user_devices(self, telegram_id: int) -> List[Device]:
-        """Get all active devices for user."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -72,19 +71,16 @@ class DatabaseManager:
                 ORDER BY created_at DESC
             """, (telegram_id,))
 
-            devices = []
-            for row in cursor.fetchall():
-                device = Device(
-                    telegram_id=row['telegram_id'],  # Изменено с user_id на telegram_id
-                    device_type=row['device_type'],
-                    config_data=row['config_data'],
-                    is_active=row['is_active'],
-                    created_at=row['created_at'],
-                    expires_at=row['expires_at'],
-                    id=row['id']
-                )
-                devices.append(device)
-            return devices
+            return [Device(
+                telegram_id=row['telegram_id'],
+                device_type=row['device_type'],
+                config_data=row['config_data'],
+                is_active=row['is_active'],
+                created_at=row['created_at'],
+                expires_at=row['expires_at'],
+                marzban_username=row['marzban_username'],
+                id=row['id']
+            ) for row in cursor.fetchall()]
 
     def add_device(self, device: Device) -> int:
         """Add new device."""
@@ -92,10 +88,16 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO devices 
-                (telegram_id, device_type, config_data, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (device.telegram_id, device.device_type, device.config_data,
-                  device.created_at, device.expires_at))
+                (telegram_id, device_type, config_data, created_at, expires_at, marzban_username)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                device.telegram_id,
+                device.device_type,
+                device.config_data,
+                device.created_at,
+                device.expires_at,
+                device.marzban_username
+            ))
             return cursor.lastrowid
 
     def add_transaction(self, transaction: Transaction) -> int:
@@ -406,3 +408,131 @@ class DatabaseManager:
                 """, (bonus, bonus, referrer_telegram_id))
         except Exception as e:
             logger.error(f"Error updating referral earnings: {e}")
+
+    def update_marzban_username(self, device_id: int, username: str) -> None:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE devices 
+                SET marzban_username = ? 
+                WHERE id = ?
+            """, (username, device_id))
+
+    def get_device_by_marzban_username(self, username: str) -> Optional[Device]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM devices 
+                WHERE marzban_username = ? AND is_active = 1
+            """, (username,))
+            row = cursor.fetchone()
+            if row:
+                return Device(**dict(row))
+            return None
+
+    def get_all_active_devices(self) -> List[Device]:
+        """Get all active devices."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM devices 
+                WHERE is_active = 1 
+                ORDER BY created_at DESC
+            """)
+
+            devices = []
+            for row in cursor.fetchall():
+                device = Device(
+                    telegram_id=row['telegram_id'],
+                    device_type=row['device_type'],
+                    config_data=row['config_data'],
+                    is_active=row['is_active'],
+                    created_at=row['created_at'],
+                    expires_at=row['expires_at'],
+                    marzban_username=row['marzban_username'],
+                    id=row['id']
+                )
+                devices.append(device)
+            return devices
+
+    def update_device_expiry(self, device_id: int, new_expiry: datetime) -> bool:
+        """Update device expiry date."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE devices 
+                    SET expires_at = ? 
+                    WHERE id = ?
+                """, (new_expiry, device_id))
+                return True
+        except Exception as e:
+            logger.error(f"Error updating device expiry: {e}")
+            return False
+
+    def get_device_by_id(self, device_id: int) -> Optional[Device]:
+        """Get device by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM devices 
+                WHERE id = ? AND is_active = 1
+            """, (device_id,))
+            row = cursor.fetchone()
+            if row:
+                return Device(
+                    telegram_id=row['telegram_id'],
+                    device_type=row['device_type'],
+                    config_data=row['config_data'],
+                    is_active=row['is_active'],
+                    created_at=row['created_at'],
+                    expires_at=row['expires_at'],
+                    marzban_username=row['marzban_username'],
+                    id=row['id']
+                )
+            return None
+
+    def update_device_config(self, device_id: int, config_data: str) -> bool:
+        """Обновление конфигурации устройства."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE devices 
+                    SET config_data = ?
+                    WHERE id = ?
+                """, (config_data, device_id))
+                return True
+        except Exception as e:
+            logger.error(f"Error updating device config: {e}")
+            return False
+
+    def deactivate_device(self, device_id: int) -> bool:
+        """Деактивация устройства."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE devices 
+                    SET is_active = 0
+                    WHERE id = ?
+                """, (device_id,))
+                return True
+        except Exception as e:
+            logger.error(f"Error deactivating device: {e}")
+            return False
+
+    def get_user_active_devices_count(self, telegram_id: int) -> int:
+        """Получение количества активных устройств пользователя."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) as count 
+                    FROM devices 
+                    WHERE telegram_id = ? AND is_active = 1
+                """, (telegram_id,))
+                return cursor.fetchone()['count']
+        except Exception as e:
+            logger.error(f"Error getting active devices count: {e}")
+            return 0

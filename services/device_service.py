@@ -1,54 +1,139 @@
 import os
-from typing import List, Optional
+import logging
+import json
+import qrcode
+from qrcode.constants import ERROR_CORRECT_L
+import io
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from database.models import Device
 from database.db_manager import DatabaseManager
-from config.settings import DEFAULT_PLAN_PRICE
-
+from config.settings import (
+    DEFAULT_PLAN_PRICE,
+    MARZBAN_PROTOCOLS
+)
+from services.marzban_service import MarzbanService
 
 class DeviceService:
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, marzban_service: MarzbanService):
         self.db_manager = db_manager
+        self.marzban = marzban_service
+        self.logger = logging.getLogger('device_service')
 
-    def get_user_devices(self, telegram_id: int) -> List[Device]:
-        """Get all active devices for user."""
-        return self.db_manager.get_user_devices(telegram_id)
+    def format_device_info(self, device: Device) -> Tuple[str, Optional[io.BytesIO]]:
+        try:
+            marzban_config = self.marzban.get_user_config(device.marzban_username)
+            if not marzban_config:
+                return "Ошибка получения информации об устройстве", None
 
-    def can_add_device(self, telegram_id: int) -> bool:
-        """Check if user can add new device."""
-        user = self.db_manager.get_user(telegram_id)
-        return user and user.balance >= DEFAULT_PLAN_PRICE
+            links = marzban_config.get('links', [])
+            vless_link = next((link for link in links if link.startswith('vless://')), '')
 
-    # device_service.py
-    def add_device(self, telegram_id: int, device_type: str) -> Optional[Device]:
-        """Add new device."""
-        if not self.can_add_device(telegram_id):
+            info_text = f"""
+    ℹ️ *Информация:*
+    👤 Пользователь: `{device.telegram_id}`
+    📱 Устройство: {device.device_type}
+    📅 Дата создания: {device.created_at}
+    ⌛ Дата истечения: {device.expires_at}
+    🌍 Страна: 🇩🇪 Германия
+    🔒 Протокол: Vless
+
+    1️⃣ *Скопируйте конфигурацию*
+    Нажмите на ссылку ниже, чтобы скопировать ⬇️
+    `{device.marzban_username}`
+
+    2️⃣ *Скопируйте ссылку для подключения:*
+    `{vless_link}`
+    """
+
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(vless_link)
+            qr.make(fit=True)
+
+            qr_buffer = io.BytesIO()
+            qr.make_image(fill_color="black", back_color="white").save(qr_buffer, "PNG")
+            qr_buffer.seek(0)
+
+            return info_text, qr_buffer
+
+        except Exception as e:
+            self.logger.error(f"Error formatting device info: {e}")
+            return "Ошибка форматирования информации об устройстве", None
+
+    def add_device(self, telegram_id: int, device_type: str, days: int = 30) -> Optional[Device]:
+        try:
+            if not self.can_add_device(telegram_id):
+                return None
+
+            marzban_username = f"vless_{device_type.lower()}_{int(datetime.now().timestamp())}"
+            self.logger.info(f"Creating Marzban user: {marzban_username}")
+
+            marzban_user = self.marzban.create_user(marzban_username, days)
+            if not marzban_user:
+                return None
+
+            device = Device(
+                telegram_id=telegram_id,
+                device_type=device_type,
+                config_data=json.dumps(marzban_user),  # сохраняем полный ответ от Marzban
+                created_at=datetime.now(),
+                expires_at=datetime.now() + timedelta(days=days),
+                marzban_username=marzban_username  # важно сохранить это
+            )
+
+            device_id = self.db_manager.add_device(device)
+            if device_id:
+                self.db_manager.update_balance(telegram_id, -DEFAULT_PLAN_PRICE)
+                device.id = device_id
+                return device
+
             return None
 
-        current_time = datetime.now()
-        expires_at = current_time + timedelta(minutes=2)  # для тестового тарифа
+        except Exception as e:
+            self.logger.error(f"Error adding device: {e}")
+            return None
 
-        config_data = self._generate_config(device_type)
+    def get_device_status(self, device: Device) -> Dict[str, Any]:
+        """Get device status and usage info."""
+        try:
+            # Если expires_at является строкой, используем её напрямую
+            if isinstance(device.expires_at, str):
+                expires = device.expires_at
+            else:
+                expires = device.expires_at.strftime("%d.%m.%Y %H:%M:%S") if device.expires_at else 'Бессрочно'
 
-        device = Device(
-            telegram_id=telegram_id,
-            device_type=device_type,
-            config_data=config_data,
-            created_at=current_time,
-            expires_at=expires_at
-        )
+            # То же самое для created_at
+            if isinstance(device.created_at, str):
+                created = device.created_at
+            else:
+                created = device.created_at.strftime("%d.%m.%Y %H:%M:%S") if device.created_at else 'Неизвестно'
 
-        device_id = self.db_manager.add_device(device)
-        if device_id:
-            self.db_manager.update_balance(telegram_id, -DEFAULT_PLAN_PRICE)
-            device.id = device_id
-            return device
-        return None
+            return {
+                'status': 'active' if device.is_active else 'inactive',
+                'created': created,
+                'expires': expires
+            }
 
-    def can_add_device(self, telegram_id: int) -> bool:
-        """Check if user can add new device."""
-        user = self.db_manager.get_user(telegram_id)
-        return user and user.balance >= DEFAULT_PLAN_PRICE
+        except Exception as e:
+            self.logger.error(f"Error getting device status: {e}")
+            return {
+                'status': 'error',
+                'created': 'Неизвестно',
+                'expires': 'Неизвестно'
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error getting device status: {e}")
+            return {
+                'status': 'error',
+                'created': 'Неизвестно',
+                'expires': 'Неизвестно'
+            }
 
     def get_user_devices(self, telegram_id: int) -> List[Device]:
         """Get all active devices for user."""
@@ -56,14 +141,46 @@ class DeviceService:
 
     def save_config_file(self, config_data: str, device_type: str) -> str:
         """Save config to temporary file."""
-        filename = f"{device_type}_config_{datetime.now().timestamp()}.txt"
         try:
+            configs = json.loads(config_data)
+            formatted_text = self.format_config_for_device(configs, device_type)
+
+            filename = f"{device_type}_config_{datetime.now().timestamp()}.txt"
             with open(filename, 'w', encoding='utf-8') as f:
-                f.write(config_data)
+                f.write(formatted_text)
             return filename
         except Exception as e:
-            print(f"Error saving config file: {e}")
+            self.logger.error(f"Error saving config file: {e}")
             return ""
+
+    def can_add_device(self, telegram_id: int) -> bool:
+        """Check if user can add new device."""
+        try:
+            user = self.db_manager.get_user(telegram_id)
+            return user and user.balance >= DEFAULT_PLAN_PRICE
+        except Exception as e:
+            self.logger.error(f"Error checking if user can add device: {e}")
+            return False
+
+    def format_config_for_device(self, configs: dict, device_type: str) -> str:
+        """Format Marzban config for specific device type."""
+        try:
+            formatted_text = f"=== Конфигурация для {device_type} ===\n\n"
+            available_protocols = MARZBAN_PROTOCOLS.get(device_type, {})
+
+            for protocol, config in configs['proxies'].items():
+                if available_protocols.get(protocol, False) and 'uri' in config:
+                    formatted_text += f"--- {protocol.upper()} ---\n"
+                    formatted_text += f"Ссылка для подключения:\n{config['uri']}\n\n"
+
+            if formatted_text == f"=== Конфигурация для {device_type} ===\n\n":
+                return "Нет доступных конфигураций для данного типа устройства"
+
+            return formatted_text
+
+        except Exception as e:
+            self.logger.error(f"Error formatting config: {e}")
+            return "Ошибка форматирования конфигурации"
 
     def cleanup_config_file(self, filename: str) -> None:
         """Remove temporary config file."""
@@ -71,20 +188,4 @@ class DeviceService:
             if filename and os.path.exists(filename):
                 os.remove(filename)
         except Exception as e:
-            print(f"Error removing config file: {e}")
-
-    @staticmethod
-    def _generate_config(device_type: str) -> str:
-        """Generate VPN configuration for device."""
-        return f"""
-# VPN Configuration for {device_type}
-server = vpn.example.com
-port = 1194
-protocol = udp
-cipher = AES-256-GCM
-auth = SHA512
-# Additional configuration parameters would go here
-"""
-
-
-__all__ = ['DeviceService']
+            self.logger.error(f"Error removing config file: {e}")

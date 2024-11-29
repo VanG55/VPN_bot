@@ -12,31 +12,41 @@ from services.payment_service import PaymentService
 from services.support_service import SupportService
 from services.qr_service import QRService
 from utils.rate_limiter import RateLimiter
+import io
 from .menu_handler import MenuHandler
 from config.settings import MESSAGE_TEMPLATES, SUPPORT_WELCOME_MESSAGE
 import logging
-from datetime import datetime
+import qrcode
 from datetime import datetime, timedelta, timezone
 from config.settings import DEFAULT_PLAN_PRICE
 from database.models import Device
+import json
+from config.settings import MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD
+from services.marzban_service import MarzbanService
 
 logger = logging.getLogger('callback_handler')
 
 
 class CallbackHandler:
-    def __init__(
-            self,
-            bot: TeleBot,
-            db_manager: DatabaseManager,
-            qr_service: QRService = None,
-            rate_limiter: RateLimiter = None
-    ):
+    # In callback_handler.py
+    def __init__(self, bot: TeleBot, db_manager: DatabaseManager, qr_service: QRService = None,
+                 rate_limiter: RateLimiter = None):
         self.bot = bot
         self.db_manager = db_manager
+        # Создаем экземпляр MarzbanService
+        self.marzban_service = MarzbanService(
+            host=MARZBAN_HOST,
+            username=MARZBAN_USERNAME,
+            password=MARZBAN_PASSWORD
+        )
+        # Передаем его в DeviceService
+        self.device_service = DeviceService(
+            db_manager=db_manager,
+            marzban_service=self.marzban_service
+        )
         self.qr_service = qr_service or QRService()
         self.rate_limiter = rate_limiter or RateLimiter()
         self.user_service = UserService(db_manager)
-        self.device_service = DeviceService(db_manager)
         self.payment_service = PaymentService(db_manager)
         self.support_service = SupportService(bot, db_manager)
         self.menu_handler = MenuHandler()
@@ -317,48 +327,92 @@ class CallbackHandler:
     def handle_devices(self, call: CallbackQuery):
         try:
             devices = self.device_service.get_user_devices(call.from_user.id)
-            devices_info = "*📱 Список ваших устройств:*\n\n"
-
-            current_time = datetime.now()
-            if devices:
-                for i, device in enumerate(devices, 1):
-                    try:
-                        if isinstance(device.created_at, str):
-                            created = datetime.strptime(device.created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-                        else:
-                            created = device.created_at
-
-                        if isinstance(device.expires_at, str):
-                            expires = datetime.strptime(device.expires_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-                        else:
-                            expires = device.expires_at
-
-                        devices_info += (
-                            f"{i}. *{device.device_type}*\n"
-                            f"   📅 Создано: {created.strftime('%Y-%m-%d %H:%M:%S')} (МСК)\n"
-                            f"   🕒 Истекает: {expires.strftime('%Y-%m-%d %H:%M:%S')} (МСК)\n"
-                            f"   ✅ Активен\n\n"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error formatting device: {e}")
-            else:
-                devices_info += "У вас пока нет активных устройств.\n\n"
-
-            devices_info += "_(для установки VPN нажмите 'Добавить устройство')_"
-
-            self.bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=devices_info,
-                parse_mode='Markdown',
-                reply_markup=self.menu_handler.create_devices_menu()
+            message_text = (
+                "*📱 Список ваших устройств*\n\n"
+                "В этом разделе вы можете управлять вашими конфигурационными файлами.\n\n"
+                "⚠️ Внимание, одна конфигурация должна устанавливаться только на одно устройство! "
+                "При необходимости использовать несколько устройств, создайте конфигурацию для каждого устройства отдельно!"
             )
+
+            keyboard = InlineKeyboardMarkup()
+            for device in devices:
+                keyboard.add(InlineKeyboardButton(
+                    f"📱 {device.marzban_username}",
+                    callback_data=f"show_config_{device.id}"
+                ))
+            keyboard.add(InlineKeyboardButton("➕ Добавить устройство", callback_data="add_device"))
+            keyboard.add(InlineKeyboardButton("🔙 Вернуться", callback_data="back_to_menu"))
+
+            if call.message.photo:
+                # Если сообщение содержит фото (QR код), отправляем новое сообщение
+                self.bot.send_message(
+                    call.message.chat.id,
+                    message_text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            else:
+                # Иначе редактируем текущее сообщение
+                self.bot.edit_message_text(
+                    message_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+
         except Exception as e:
             logger.error(f"Error handling devices menu: {e}")
-            self.bot.answer_callback_query(
-                call.id,
-                "Произошла ошибка. Попробуйте еще раз."
+
+    def handle_show_config(self, call: CallbackQuery):
+        """Показать информацию о конфиге при нажатии на кнопку"""
+        try:
+            device_id = int(call.data.split('_')[2])
+            device = self.db_manager.get_device_by_id(device_id)
+
+            if not device:
+                return self.bot.answer_callback_query(call.id, "Устройство не найдено")
+
+            marzban_config = self.device_service.marzban.get_user_config(device.marzban_username)
+            vless_link = marzban_config.get('links', [])[0] if marzban_config and marzban_config.get('links') else ''
+
+            # Формируем сообщение
+            config_message = (
+                "*Информация:*\n"
+                f"👤 Пользователь: `{device.telegram_id}`\n"
+                f"📱 Устройство: {device.device_type}\n"
+                f"📅 Дата создания: {device.created_at}\n"
+                f"⌛ Дата истечения: {device.expires_at}\n"
+                f"🌍 Страна: 🇩🇪 Германия\n"
+                f"🔒 Протокол: Vless\n\n"
+                "1️⃣ *Скопируйте конфигурацию*\n"
+                f"Нажмите на ссылку ниже, чтобы скопировать ⬇️\n"
+                f"`{device.marzban_username}`\n\n"
+                "2️⃣ *Скопируйте ссылку для подключения:*\n"
+                f"`{vless_link}`\n\n"
+                "3️⃣ Отсканируйте QR-код ниже"
             )
+
+            # Генерируем QR
+            qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+            qr.add_data(vless_link)
+            qr.make(fit=True)
+            qr_buffer = io.BytesIO()
+            qr.make_image().save(qr_buffer, format='PNG')
+            qr_buffer.seek(0)
+
+            # Отправляем сообщение с QR кодом
+            self.bot.send_photo(
+                call.message.chat.id,
+                qr_buffer,
+                caption=config_message,
+                parse_mode='Markdown',
+                reply_markup=self.menu_handler.create_my_devices_button()
+            )
+
+        except Exception as e:
+            logger.error(f"Error showing config: {e}")
+            self.bot.answer_callback_query(call.id, "Произошла ошибка")
 
     def handle_top_up(self, call: CallbackQuery):
         """Handle top up button press."""
@@ -549,110 +603,182 @@ class CallbackHandler:
             )
 
     def process_days_selection(self, message: Message):
-        """Process days selection."""
         try:
             user_id = message.from_user.id
             if user_id not in self.user_states:
                 return
 
-            try:
-                days = int(message.text)
+            days = int(message.text)
+            if not (1 <= days <= 30):
+                self.bot.reply_to(message, "❌ Пожалуйста, введите число от 1 до 30.")
+                return
 
-                # Специальная проверка для тестового тарифа
-                if days == 999:  # Специальный код для тестового тарифа
-                    minutes = 2
-                    cost = DEFAULT_PLAN_PRICE
-                    current_time = datetime.now()
-                    expires_at = current_time + timedelta(minutes=minutes)
+            device = self.device_service.add_device(
+                telegram_id=user_id,
+                device_type=self.user_states[user_id]['device_type'],
+                days=days
+            )
 
-                    test_message = (
-                        "⚠️ Внимание! Вы выбрали тестовый тариф:\n"
-                        f"Длительность: {minutes} минуты\n"
-                        f"Стоимость: {cost} руб."
-                    )
-                    self.bot.reply_to(message, test_message)
+            if device:
+                marzban_config = self.device_service.marzban.get_user_config(device.marzban_username)
+                vless_link = marzban_config.get('links', [])[0] if marzban_config and marzban_config.get(
+                    'links') else ''
 
-                elif not (1 <= days <= 30):
-                    self.bot.reply_to(
-                        message,
-                        "❌ Пожалуйста, введите число от 1 до 30."
-                    )
-                    return
-                else:
-                    cost = days * DEFAULT_PLAN_PRICE
-                    current_time = datetime.now()
-                    expires_at = current_time + timedelta(hours=24 * days)
-
-                user = self.db_manager.get_user(user_id)
-                if user.balance < cost:
-                    self.bot.reply_to(
-                        message,
-                        f"❌ Недостаточно средств. Требуется: {cost} руб."
-                    )
-                    return
-
-                device = Device(
-                    telegram_id=user_id,  # Изменено с user_id на telegram_id
-                    device_type=self.user_states[user_id]['device_type'],
-                    config_data=self.device_service._generate_config(
-                        self.user_states[user_id]['device_type']
-                    ),
-                    expires_at=expires_at
+                config_message = (
+                    "✅ *Конфигурация успешно создана!*\n\n"
+                    "*Информация:*\n"
+                    f"👤 Пользователь: `{device.telegram_id}`\n"
+                    f"📱 Устройство: {device.device_type}\n"
+                    f"📅 Дата создания: {device.created_at}\n"
+                    f"⌛ Дата истечения: {device.expires_at}\n"
+                    f"🌍 Страна: 🇩🇪 Германия\n"
+                    f"🔒 Протокол: Vless\n\n"
+                    "*Скопируйте ссылку для подключения:*\n"
+                    f"`{vless_link}`\n\n"
+                    "📱 Отсканируйте QR-код выше"
                 )
 
-                device_id = self.db_manager.add_device(device)
-                if device_id:
-                    self.db_manager.update_balance(user_id, -cost)
+                # Генерируем QR-код
+                qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+                qr.add_data(vless_link)
+                qr.make(fit=True)
+                qr_buffer = io.BytesIO()
+                qr.make_image().save(qr_buffer, format='PNG')
+                qr_buffer.seek(0)
 
-                    if days == 999:
-                        success_message = (
-                            f"✅ Тестовый конфиг {device.device_type} создан!\n"
-                            f"Срок действия: 2 минуты\n"
-                            f"Стоимость: {cost} руб."
-                        )
-                    else:
-                        success_message = (
-                            f"✅ Устройство {device.device_type} успешно добавлено!\n"
-                            f"Срок действия: {days} дней\n"
-                            f"Стоимость: {cost} руб."
-                        )
-                    self.bot.reply_to(message, success_message)
-
-                    config_file = self.device_service.save_config_file(
-                        device.config_data,
-                        device.device_type
-                    )
-
-                    if config_file:
-                        with open(config_file, 'rb') as config:
-                            self.bot.send_document(
-                                message.chat.id,
-                                config,
-                                caption=f"📋 Конфигурация для устройства {device.device_type}"
-                            )
-                        self.device_service.cleanup_config_file(config_file)
-
-                    self.bot.send_message(
-                        message.chat.id,
-                        "Выберите дальнейшее действие:",
-                        reply_markup=self.menu_handler.create_back_to_menu()
-                    )
-
-            except ValueError:
-                self.bot.reply_to(
-                    message,
-                    "❌ Пожалуйста, введите корректное число от 1 до 30 или 999 для тестового тарифа."
+                # Отправляем сообщение с QR-кодом
+                self.bot.send_photo(
+                    message.chat.id,
+                    qr_buffer,
+                    caption=config_message,
+                    parse_mode='Markdown',
+                    reply_markup=self.menu_handler.create_my_devices_button()
                 )
 
+        except ValueError:
+            self.bot.reply_to(message, "❌ Пожалуйста, введите корректное число от 1 до 30.")
         except Exception as e:
             logger.error(f"Error processing days selection: {e}")
-            self.bot.reply_to(
-                message,
-                "Произошла ошибка. Попробуйте еще раз."
-            )
+            self.bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз.")
         finally:
             if user_id in self.user_states:
                 del self.user_states[user_id]
+
+    def handle_device_info(self, call: CallbackQuery):
+        """Обработка запроса информации об устройстве."""
+        try:
+            device_id = int(call.data.split('_')[2])
+            device = self.db_manager.get_device_by_id(device_id)
+
+            if not device:
+                self.bot.answer_callback_query(
+                    call.id,
+                    "Устройство не найдено"
+                )
+                return
+
+            status = self.device_service.get_device_status(device)
+
+            info_text = (
+                f"📱 *Информация об устройстве*\n\n"
+                f"Тип: {device.device_type}\n"
+                f"Статус: {'🟢 Активно' if status['status'] == 'active' else '🔴 Неактивно'}\n"
+                f"Загружено: {status['upload']}\n"
+                f"Скачано: {status['download']}\n"
+                f"Последнее использование: {status['last_used']}\n"
+                f"Истекает: {status['expires']}\n"
+            )
+
+            keyboard = InlineKeyboardMarkup()
+            keyboard.row(
+                InlineKeyboardButton("🔄 Обновить конфиг", callback_data=f"refresh_config_{device_id}"),
+                InlineKeyboardButton("⏳ Продлить", callback_data=f"extend_device_{device_id}")
+            )
+            keyboard.row(
+                InlineKeyboardButton("❌ Удалить", callback_data=f"delete_device_{device_id}"),
+                InlineKeyboardButton("🔙 Назад", callback_data="my_devices")
+            )
+
+            self.bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=info_text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error handling device info: {e}")
+            self.bot.answer_callback_query(
+                call.id,
+                "Произошла ошибка. Попробуйте позже."
+            )
+
+    def handle_refresh_config(self, call: CallbackQuery):
+        """Обновление конфигурации устройства."""
+        try:
+            device_id = int(call.data.split('_')[2])
+            device = self.db_manager.get_device_by_id(device_id)
+
+            if not device:
+                self.bot.answer_callback_query(call.id, "Устройство не найдено")
+                return
+
+            # Получаем новую конфигурацию из Marzban
+            new_config = self.marzban.get_user_config(device.marzban_username)
+            if not new_config:
+                self.bot.answer_callback_query(call.id, "Ошибка обновления конфигурации")
+                return
+
+            # Обновляем конфигурацию в БД
+            device.config_data = json.dumps(new_config)
+            self.db_manager.update_device_config(device.id, device.config_data)
+
+            # Отправляем новый конфиг пользователю
+            config_file = self.device_service.save_config_file(
+                device.config_data,
+                device.device_type
+            )
+
+            if config_file:
+                with open(config_file, 'rb') as config:
+                    self.bot.send_document(
+                        call.message.chat.id,
+                        config,
+                        caption="📋 Обновленная конфигурация"
+                    )
+                self.device_service.cleanup_config_file(config_file)
+
+            self.bot.answer_callback_query(call.id, "✅ Конфигурация обновлена")
+
+        except Exception as e:
+            logger.error(f"Error refreshing config: {e}")
+            self.bot.answer_callback_query(call.id, "Произошла ошибка. Попробуйте позже")
+
+    def handle_delete_device(self, call: CallbackQuery):
+        """Удаление устройства."""
+        try:
+            device_id = int(call.data.split('_')[2])
+            device = self.db_manager.get_device_by_id(device_id)
+
+            if not device:
+                self.bot.answer_callback_query(call.id, "Устройство не найдено")
+                return
+
+            # Удаляем пользователя из Marzban
+            if self.marzban.delete_user(device.marzban_username):
+                # Деактивируем устройство в БД
+                self.db_manager.deactivate_device(device.id)
+
+                self.bot.answer_callback_query(call.id, "✅ Устройство удалено")
+                # Возвращаемся к списку устройств
+                self.handle_devices(call)
+            else:
+                self.bot.answer_callback_query(call.id, "Ошибка удаления устройства")
+
+        except Exception as e:
+            logger.error(f"Error deleting device: {e}")
+            self.bot.answer_callback_query(call.id, "Произошла ошибка. Попробуйте позже")
 
     def handle_referral(self, call: CallbackQuery):
         """Handle referral program button press."""
