@@ -26,6 +26,7 @@ class PaymentService:
         self.min_amount = 10.0  # Минимальная сумма
         self.max_amount = 10000.0  # Максимальная сумма
 
+
     def create_payment_link(self, telegram_id: int, amount: float, email: str) -> Optional[Dict[str, Any]]:
         """Create payment in YooKassa and return payment link."""
         try:

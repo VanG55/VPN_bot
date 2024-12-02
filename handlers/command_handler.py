@@ -9,6 +9,13 @@ from config.settings import MESSAGE_TEMPLATES, SUPPORT_GROUP_ID
 import logging
 from time import time
 from collections import defaultdict
+from services.device_service import DeviceService
+from services.marzban_service import MarzbanService
+from config.settings import (
+    MARZBAN_HOST,
+    MARZBAN_USERNAME,
+    MARZBAN_PASSWORD
+)
 
 logger = logging.getLogger('command_handler')
 
@@ -20,6 +27,7 @@ class CommandRateLimit:
         self.max_commands = 3  # Максимальное количество команд в time_window
         self.blocked_users = {}  # Заблокированные пользователи и время блокировки
         self.block_duration = 300  # Длительность блокировки в секундах (5 минут)
+
 
     def _cleanup_old_commands(self, user_id: int):
         """Очистка старых команд."""
@@ -72,6 +80,15 @@ class CommandHandler:
         self.support_service = SupportService(bot, db_manager)
         self.menu_handler = MenuHandler()
         self.rate_limiter = CommandRateLimit()
+        self.marzban_service = MarzbanService(
+            MARZBAN_HOST,
+            MARZBAN_USERNAME,
+            MARZBAN_PASSWORD
+        )
+        self.device_service = DeviceService(
+            db_manager=db_manager,
+            marzban_service=self.marzban_service
+        )
 
     def register_handlers(self):
         """Register command handlers."""
@@ -106,22 +123,55 @@ class CommandHandler:
             if len(args) > 1 and args[1].startswith('ref'):
                 try:
                     referrer_telegram_id = int(args[1].replace('ref', ''))
-                    logger.info(f"Referral link from {referrer_telegram_id} to {user_id}")
+                    logger.info(f"Processing referral: referrer={referrer_telegram_id}, referee={user_id}")
 
                     # Проверяем существование реферера
                     referrer = self.db_manager.get_user(referrer_telegram_id)
                     if referrer:
+                        # Создаем Trial конфиг для реферера (2 дня)
+                        logger.info(f"Creating Trial config for referrer {referrer_telegram_id}")
+                        referrer_config = self.device_service.add_device(
+                            telegram_id=referrer_telegram_id,
+                            device_type="Trial",
+                            days=2
+                        )
+                        if referrer_config:
+                            self.bot.send_message(
+                                referrer_telegram_id,
+                                "🎁 Вам начислен Trial конфиг на 2 дня за приглашение друга!"
+                            )
+                            logger.info(f"Trial config created for referrer: {referrer_config.marzban_username}")
+
+                        # Создаем Trial конфиг для приглашенного (1 день)
+                        logger.info(f"Creating Trial config for referee {user_id}")
+                        referee_config = self.device_service.add_device(
+                            telegram_id=user_id,
+                            device_type="Trial",
+                            days=1
+                        )
+                        if referee_config:
+                            self.bot.send_message(
+                                user_id,
+                                "🎁 Вам начислен Trial конфиг на 1 день!"
+                            )
+                            logger.info(f"Trial config created for referee: {referee_config.marzban_username}")
+
+                        # Добавляем реферальную связь
                         success = self.db_manager.add_referral(
                             referrer_telegram_id=referrer_telegram_id,
                             referee_telegram_id=user_id
                         )
-                        if success:
-                            self.bot.send_message(
-                                referrer_telegram_id,
-                                "👥 Новый реферал присоединился к боту!"
-                            )
+                        logger.info(f"Referral link added: {success}")
+
+                    else:
+                        logger.warning(f"Referrer {referrer_telegram_id} not found")
+
                 except Exception as e:
-                    logger.error(f"Error processing referral: {e}")
+                    logger.error(f"Error processing referral: {e}", exc_info=True)
+
+            # Проверяем возврат из оплаты
+            if len(args) > 1 and args[1].startswith('payment_'):
+                self._handle_payment_return(user_id)
 
             # Проверка принятия соглашения
             if not user or not user.agreement_accepted:
@@ -131,7 +181,6 @@ class CommandHandler:
                     "Использования и Конфиденциальности.\n\n"
                     "Для ознакомления с пользовательским соглашением перейдите "
                     "по ссылке: [Пользовательское соглашение](https://telegra.ph/Polzovatelskoe-soglashenie-11-16-9)"
-                    "Использования и Конфиденциальности."
                 )
                 self.bot.send_message(
                     message.chat.id,
@@ -140,10 +189,6 @@ class CommandHandler:
                     reply_markup=self.menu_handler.create_agreement_menu()
                 )
                 return
-
-            # Проверяем возврат из оплаты
-            if len(args) > 1 and args[1].startswith('payment_'):
-                self._handle_payment_return(user_id)
 
             # Отправка основного меню
             user_info = self.user_service.get_user_info(user.telegram_id)
@@ -164,14 +209,25 @@ class CommandHandler:
         try:
             transactions = self.db_manager.get_pending_transactions(user_id)
             if not transactions:
+                logger.info(f"No pending transactions found for user {user_id}")
                 return
 
             latest_transaction = transactions[0]
+            logger.info(f"Checking payment status for transaction {latest_transaction.payment_id}")
+
             payment_status = self.payment_service.check_payment_status(
                 latest_transaction.payment_id
             )
+            logger.info(f"Payment status received: {payment_status}")
 
             if payment_status and payment_status.get('paid'):
+                logger.info(f"Processing successful payment for user {user_id}")
+                # Обновляем баланс
+                self.db_manager.update_balance(user_id, latest_transaction.amount)
+                # Обновляем статус транзакции
+                self.db_manager.update_transaction_status(latest_transaction.payment_id, 'completed')
+
+                # Отправляем уведомление
                 success_message = (
                     "✅ Успешное пополнение\n\n"
                     f"**Ваш баланс пополнен на {latest_transaction.amount:.2f} руб**\n"

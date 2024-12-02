@@ -1,6 +1,7 @@
 import sqlite3
+import json
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 import logging
 from config.settings import DB_NAME
@@ -536,3 +537,33 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting active devices count: {e}")
             return 0
+
+    def add_trial_config(self, telegram_id: int, is_referrer: bool = False) -> None:
+        """
+        Создает trial конфиг для пользователя.
+        is_referrer - True если это реферер (2 дня), False если приглашенный (1 день)
+        """
+        try:
+            days = 2 if is_referrer else 1
+            marzban_username = f"trial_{self.device_type.lower()}_{int(datetime.now().timestamp())}"
+
+            # Создаем конфиг в Marzban
+            marzban_user = self.marzban.create_user(marzban_username, days)
+            if not marzban_user:
+                return None
+
+            device = Device(
+                telegram_id=telegram_id,
+                device_type="Trial",
+                config_data=json.dumps(marzban_user),
+                marzban_username=marzban_username,
+                created_at=datetime.now(),
+                expires_at=datetime.now() + timedelta(days=days)
+            )
+
+            self.add_device(device)
+            return device
+
+        except Exception as e:
+            logger.error(f"Error adding trial config: {e}")
+            return None

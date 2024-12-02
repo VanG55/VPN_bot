@@ -70,6 +70,14 @@ class DeviceService:
             if not self.can_add_device(telegram_id):
                 return None
 
+            # Проверяем достаточно ли денег на балансе для создания конфига
+            total_cost = DEFAULT_PLAN_PRICE * days  # Считаем полную стоимость за все дни
+            user = self.db_manager.get_user(telegram_id)
+
+            if not user or user.balance < total_cost:
+                self.logger.info(f"Insufficient balance: required {total_cost}, available {user.balance if user else 0}")
+                return None
+
             marzban_username = f"vless_{device_type.lower()}_{int(datetime.now().timestamp())}"
             self.logger.info(f"Creating Marzban user: {marzban_username}")
 
@@ -88,7 +96,8 @@ class DeviceService:
 
             device_id = self.db_manager.add_device(device)
             if device_id:
-                self.db_manager.update_balance(telegram_id, -DEFAULT_PLAN_PRICE)
+                # Списываем полную стоимость за все дни
+                self.db_manager.update_balance(telegram_id, -total_cost)
                 device.id = device_id
                 return device
 

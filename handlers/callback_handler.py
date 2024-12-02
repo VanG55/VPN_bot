@@ -104,9 +104,10 @@ class CallbackHandler:
                 'back_to_menu': self.handle_back_to_menu,
                 'add_device': self.handle_add_device,
                 'start_support': self.handle_start_support,
-                'referral': self.handle_referral,  # Добавляем обработчик для реферальной системы
+                'referral': self.handle_referral,
                 'custom_amount': self.handle_custom_amount,
-                'payment_history': self.handle_payment_history
+                'payment_history': self.handle_payment_history,
+                'cancel_input': self.handle_cancel_input,  # Добавляем обработчик отмены
             }
 
             if call.data in handlers:
@@ -115,6 +116,8 @@ class CallbackHandler:
                 self.handle_top_up_amount(call)
             elif call.data.startswith('select_device_'):
                 self.handle_select_device(call)
+            elif call.data.startswith('show_config_'):
+                self.handle_show_config(call)
 
         except Exception as e:
             logger.error(f"Error handling callback: {e}")
@@ -124,11 +127,12 @@ class CallbackHandler:
             )
 
     def handle_cancel_input(self, call: CallbackQuery):
-        """Handle cancel button press during input."""
+        """Обработка кнопки отмены при вводе суммы."""
         try:
-            # Очищаем состояние пользователя
-            if call.from_user.id in self.user_states:
-                del self.user_states[call.from_user.id]
+            user_id = call.from_user.id
+            # Очищаем состояние пользователя, если оно есть
+            if user_id in self.user_states:
+                del self.user_states[user_id]
 
             # Возвращаемся к меню пополнения
             self.bot.edit_message_text(
@@ -149,6 +153,9 @@ class CallbackHandler:
     def handle_custom_amount(self, call: CallbackQuery):
         """Handle custom amount top up."""
         try:
+            # Очищаем все предыдущие обработчики для этого пользователя
+            self.bot.clear_step_handler_by_chat_id(call.message.chat.id)
+
             msg = "Введите сумму пополнения (от 10 до 10000 руб):"
             sent_msg = self.bot.edit_message_text(
                 chat_id=call.message.chat.id,
@@ -170,6 +177,9 @@ class CallbackHandler:
     def process_custom_amount(self, message: Message):
         """Process custom amount message."""
         try:
+            # Очищаем все предыдущие обработчики
+            self.bot.clear_step_handler_by_chat_id(message.chat.id)
+
             user_id = message.from_user.id
 
             try:
@@ -330,46 +340,75 @@ class CallbackHandler:
 
     def handle_devices(self, call: CallbackQuery):
         try:
+            # Получаем все активные устройства
             devices = self.device_service.get_user_devices(call.from_user.id)
+
+            # Проверяем каждое устройство перед показом
+            active_devices = []
+            for device in devices:
+                marzban_config = self.device_service.marzban.get_user_config(device.marzban_username)
+                if marzban_config:  # Если конфиг существует в Marzban
+                    active_devices.append(device)
+                else:  # Если конфиг не найден в Marzban
+                    # Деактивируем в БД
+                    self.db_manager.deactivate_device(device.id)
+
             message_text = (
                 "*📱 Список ваших устройств*\n\n"
                 "В этом разделе вы можете управлять вашими конфигурационными файлами.\n\n"
                 "⚠️ Внимание, одна конфигурация должна устанавливаться только на одно устройство! "
-                "При необходимости использовать несколько устройств, создайте конфигурацию для каждого устройства отдельно!"
+                "При необходимости использовать несколько устройств, создайте конфигурацию для каждого устройства отдельно!\n\n"
+                "_(для установки VPN нажмите \"Добавить устройство\")_"
             )
 
             keyboard = InlineKeyboardMarkup()
+
+            # Сначала добавляем кнопки устройств
             for device in devices:
                 keyboard.add(InlineKeyboardButton(
                     f"📱 {device.marzban_username}",
                     callback_data=f"show_config_{device.id}"
                 ))
+
+            # Затем добавляем стандартные кнопки
             keyboard.add(InlineKeyboardButton("➕ Добавить устройство", callback_data="add_device"))
             keyboard.add(InlineKeyboardButton("🔙 Вернуться", callback_data="back_to_menu"))
 
-            if call.message.photo:
-                # Если сообщение содержит фото (QR код), отправляем новое сообщение
-                self.bot.send_message(
-                    call.message.chat.id,
-                    message_text,
+            try:
+                # Пробуем отредактировать текущее сообщение
+                self.bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=message_text,
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
-            else:
-                # Иначе редактируем текущее сообщение
-                self.bot.edit_message_text(
-                    message_text,
+            except Exception as edit_error:
+                # Если не получилось отредактировать, удаляем старое и отправляем новое
+                try:
+                    self.bot.delete_message(
+                        chat_id=call.message.chat.id,
+                        message_id=call.message.message_id
+                    )
+                except:
+                    pass
+
+                self.bot.send_message(
                     call.message.chat.id,
-                    call.message.message_id,
+                    text=message_text,
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
 
         except Exception as e:
             logger.error(f"Error handling devices menu: {e}")
+            self.bot.answer_callback_query(
+                call.id,
+                "Произошла ошибка. Попробуйте еще раз."
+            )
 
     def handle_show_config(self, call: CallbackQuery):
-        """Показать информацию о конфиге при нажатии на кнопку"""
+        """Показать информацию о конфиге при нажатии на кнопку."""
         try:
             device_id = int(call.data.split('_')[2])
             device = self.db_manager.get_device_by_id(device_id)
@@ -378,10 +417,13 @@ class CallbackHandler:
                 return self.bot.answer_callback_query(call.id, "Устройство не найдено")
 
             marzban_config = self.device_service.marzban.get_user_config(device.marzban_username)
-            vless_link = marzban_config.get('links', [])[0] if marzban_config and marzban_config.get('links') else ''
+            if not marzban_config:
+                return self.bot.answer_callback_query(call.id, "Ошибка получения конфигурации")
 
-            # Формируем сообщение
-            config_message = (
+            vless_link = marzban_config.get('links', [])[0] if marzban_config.get('links') else ''
+
+            info_text = (
+                "✅ Конфигурация успешно создана!\n\n"
                 "*Информация:*\n"
                 f"👤 Пользователь: `{device.telegram_id}`\n"
                 f"📱 Устройство: {device.device_type}\n"
@@ -389,15 +431,12 @@ class CallbackHandler:
                 f"⌛ Дата истечения: {device.expires_at}\n"
                 f"🌍 Страна: 🇩🇪 Германия\n"
                 f"🔒 Протокол: Vless\n\n"
-                "1️⃣ *Скопируйте конфигурацию*\n"
-                f"Нажмите на ссылку ниже, чтобы скопировать ⬇️\n"
-                f"`{device.marzban_username}`\n\n"
-                "2️⃣ *Скопируйте ссылку для подключения:*\n"
+                "*Скопируйте ссылку для подключения:*\n"
                 f"`{vless_link}`\n\n"
-                "3️⃣ Отсканируйте QR-код ниже"
+                "📱 Отсканируйте QR-код ниже"
             )
 
-            # Генерируем QR
+            # Генерируем QR-код
             qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
             qr.add_data(vless_link)
             qr.make(fit=True)
@@ -405,18 +444,18 @@ class CallbackHandler:
             qr.make_image().save(qr_buffer, format='PNG')
             qr_buffer.seek(0)
 
-            # Отправляем сообщение с QR кодом
+            # Отправляем фото с QR-кодом и информацией
             self.bot.send_photo(
                 call.message.chat.id,
                 qr_buffer,
-                caption=config_message,
+                caption=info_text,
                 parse_mode='Markdown',
                 reply_markup=self.menu_handler.create_my_devices_button()
             )
 
         except Exception as e:
             logger.error(f"Error showing config: {e}")
-            self.bot.answer_callback_query(call.id, "Произошла ошибка")
+            self.bot.answer_callback_query(call.id, "Произошла ошибка при получении конфигурации")
 
     def handle_top_up(self, call: CallbackQuery):
         """Handle top up button press."""
@@ -485,6 +524,9 @@ class CallbackHandler:
     def handle_top_up_amount(self, call: CallbackQuery):
         """Handle top up amount selection."""
         try:
+            # Очищаем все предыдущие обработчики
+            self.bot.clear_step_handler_by_chat_id(call.message.chat.id)
+
             # Сохраняем выбранную сумму во временное хранилище
             amount = float(call.data.split('_')[2])
             self.user_states[call.from_user.id] = {'action': 'waiting_email', 'amount': amount}
@@ -593,7 +635,7 @@ class CallbackHandler:
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
                 text=msg,
-                reply_markup=self.menu_handler.create_cancel_menu()
+                reply_markup=self.menu_handler.create_cancel_menu_devices()  # Используем новый метод
             )
 
             # Регистрируем обработчик для следующего сообщения
@@ -615,6 +657,28 @@ class CallbackHandler:
             days = int(message.text)
             if not (1 <= days <= 30):
                 self.bot.reply_to(message, "❌ Пожалуйста, введите число от 1 до 30.")
+                return
+
+            # Проверяем стоимость и баланс
+            total_cost = DEFAULT_PLAN_PRICE * days
+            user = self.db_manager.get_user(user_id)
+            if user.balance < total_cost:
+                insufficient_balance_text = (
+                    "❌ *Недостаточно средств*\n\n"
+                    f"Стоимость конфига на {days} дней: *{total_cost}* руб.\n"
+                    f"Ваш баланс: *{user.balance}* руб.\n\n"
+                    f"Необходимо пополнить баланс на: *{total_cost - user.balance}* руб."
+                )
+                # Очищаем состояние пользователя перед отправкой сообщения
+                if user_id in self.user_states:
+                    del self.user_states[user_id]
+
+                self.bot.reply_to(
+                    message,
+                    insufficient_balance_text,
+                    parse_mode='Markdown',
+                    reply_markup=self.menu_handler.create_back_to_menu()
+                )
                 return
 
             device = self.device_service.add_device(
@@ -785,28 +849,27 @@ class CallbackHandler:
             self.bot.answer_callback_query(call.id, "Произошла ошибка. Попробуйте позже")
 
     def handle_referral(self, call: CallbackQuery):
-        """Handle referral program button press."""
         try:
             user_id = call.from_user.id
-            bot_username = "VangVPN_bot"
+            bot_username = "VangVPN_bot"  # Замените на username вашего бота
             ref_link = f"https://t.me/{bot_username}?start=ref{user_id}"
 
             stats = self.db_manager.get_referral_stats(user_id)
 
             text = (
-                "🤝 *РЕФЕРАЛЬНАЯ ПРОГРАММА*\n"
-                "Приводите друзей и зарабатывайте 15% с их пополнений.\n\n"
+                "🤝 *РЕФЕРАЛЬНАЯ ПРОГРАММА*\n\n"
+                "Приглашайте друзей и получайте бонусы:\n"
+                "• Вы получаете Trial конфиг на 2 дня\n"
+                "• Ваш друг получает Trial конфиг на 1 день\n\n"
                 "⬇️ *Ваша реферальная ссылка (нажми, чтобы скопировать):*\n"
                 f"`{ref_link}`\n\n"
-                "❗️ Нажмите на ссылку для автоматического копирования\n\n"
                 "🏅 *Статистика:*\n"
                 f"├ Приведено друзей: `{stats['referrals_count']}`\n"
-                f"├ Бонусных рублей за все время: `{stats['total_earnings']:.2f}₽`\n"
-                f"└ Уже начислено на баланс: `{stats['total_earnings']:.2f}₽`\n\n"  # Изменили эту строку
+                f"└ Получено Trial конфигов: `{stats['referrals_count']}`\n\n"
                 "*Условия:*\n"
-                "1. Вы направляете свою реферальную ссылку другу, который ни разу не заходил в наш бот\n"
-                "2. Друг производит оплату подписки.\n"
-                "3. Вы получаете 15% за пополнения приведенных друзей!"
+                "1. Отправьте реферальную ссылку другу\n"
+                "2. Друг должен перейти по ссылке и запустить бота\n"
+                "3. Вы и ваш друг получите Trial конфиги!"
             )
 
             self.bot.edit_message_text(

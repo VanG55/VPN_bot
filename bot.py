@@ -21,6 +21,8 @@ from config.settings import (
 )
 import logging
 logging.basicConfig(level=logging.DEBUG)
+app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
 
 # Добавляем путь проекта в PYTHONPATH
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -50,26 +52,37 @@ payment_service = None
 @app.route('/payment-notification', methods=['POST'])
 def payment_notification():
     try:
+        logger.info("Received payment notification")
         # Получаем данные уведомления
         notification_data = request.get_json()
+        logger.info(f"Payment notification data: {notification_data}")
 
         # Проверяем подпись уведомления
         signature = request.headers.get('X-YooKassa-Signature')
-        if not verify_webhook_signature(signature, request.get_data().decode('utf-8')):
+        logger.info(f"Signature received: {signature}")
+
+        # Проверяем данные запроса
+        raw_data = request.get_data().decode('utf-8')
+        logger.info(f"Raw request data: {raw_data}")
+
+        if not verify_webhook_signature(signature, raw_data):
+            logger.error("Invalid signature")
             return jsonify({'error': 'Invalid signature'}), 400
 
         # Обрабатываем уведомление
         result = payment_service.handle_notification(notification_data)
+        logger.info(f"Payment processing result: {result}")
 
         if result:
+            logger.info("Payment processed successfully")
             return jsonify({'success': True}), 200
         else:
+            logger.error("Payment processing failed")
             return jsonify({'success': False}), 400
 
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
-
 
 def verify_webhook_signature(signature: str, body: str) -> bool:
     """Verify YooKassa webhook signature."""
@@ -162,6 +175,11 @@ class VPNBot:
             logger.info("Starting schedulers...")
             self.backup_service.schedule_backups()
             self.notification_service.schedule_balance_checks()
+
+            # Добавляем проверку конфигов каждые 5 минут
+            #schedule.every(5).minutes.do(
+            #    lambda: self.notification_service.check_connections_violations()
+            #)
 
             # Регистрация обработчиков
             logger.info("Registering handlers...")

@@ -7,8 +7,7 @@ import threading
 import time
 import schedule
 
-logger = logging.getLogger('notifications')
-
+logger = logging.getLogger('notifications')  # Добавляем этот логгер в начало файла
 
 class NotificationService:
     def __init__(self, bot: TeleBot, db_manager: DatabaseManager):
@@ -19,19 +18,24 @@ class NotificationService:
         self.notification_thresholds = {
             1: "⚠️ ВНИМАНИЕ! Через 24 часа ваши конфигурации будут удалены!"
         }
+        self.logger = logger  # Используем созданный логгер
 
     # notification_service.py
     def check_user_devices_expiration(self, user_id: int) -> None:
-        devices = self.db_manager.get_user_devices(user_id)
-        current_time = datetime.now()
+        try:
+            devices = self.db_manager.get_user_devices(user_id)
+            current_time = datetime.now()
 
-        for device in devices:
-            if device.expires_at and current_time > device.expires_at:
-                try:
-                    self.marzban_service.delete_user(device.marzban_username)
-                    self.db_manager.deactivate_device(device.id)
-                except Exception as e:
-                    self.logger.error(f"Error deactivating expired device: {e}")
+            for device in devices:
+                if device.expires_at and current_time > device.expires_at:
+                    try:
+                        self.marzban_service.delete_user(device.marzban_username)
+                        self.db_manager.deactivate_device(device.id)
+                    except Exception as e:
+                        logger.error(f"Error deactivating expired device: {e}")
+
+        except Exception as e:
+            logger.error(f"Error checking user devices: {e}")
 
     def check_all_users_devices_and_balance(self) -> None:
         """Проверка всех пользователей."""
@@ -57,6 +61,22 @@ class NotificationService:
         while not self._stop_flag.is_set():
             schedule.run_pending()
             time.sleep(60)
+
+        while not self._stop_flag.is_set():
+            schedule.run_pending()
+            time.sleep(60)
+
+    def schedule_balance_checks(self) -> None:
+        """Запуск планировщика проверок баланса."""
+        if self._scheduler_thread is None or not self._scheduler_thread.is_alive():
+            self._stop_flag.clear()
+            self._scheduler_thread = threading.Thread(
+                target=self._scheduler_loop,
+                name="BalanceChecker",
+                daemon=True
+            )
+            self._scheduler_thread.start()
+            logger.info("Balance check scheduler started")
 
     def schedule_balance_checks(self) -> None:
         """Запуск планировщика проверок баланса."""
@@ -140,3 +160,35 @@ class NotificationService:
 
         except Exception as e:
             self.logger.error(f"Error checking device expiration: {e}")
+
+        def check_marzban_configs(self):
+            """Проверка актуальности конфигов в Marzban."""
+            try:
+                devices = self.db_manager.get_all_active_devices()
+                for device in devices:
+                    # Проверяем существование конфига в Marzban
+                    marzban_config = self.marzban.get_user_config(device.marzban_username)
+
+                    # Если конфиг не найден в Marzban
+                    if not marzban_config:
+                        # Деактивируем устройство в БД
+                        self.db_manager.deactivate_device(device.id)
+
+                        # Уведомляем пользователя
+                        message = (
+                            "❌ *Внимание!*\n"
+                            f"Конфигурация `{device.marzban_username}` была удалена.\n"
+                            "Для продолжения работы необходимо создать новую конфигурацию."
+                        )
+
+                        try:
+                            self.bot.send_message(
+                                device.telegram_id,
+                                message,
+                                parse_mode='Markdown'
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Error sending notification: {e}")
+
+            except Exception as e:
+                self.logger.error(f"Error checking Marzban configs: {e}")

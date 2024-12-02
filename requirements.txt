@@ -5,3 +5,4 @@ qrcode==7.4.2
 Pillow==10.1.0
 requests==2.31.0
 yookassa==3.4.1
+flask==2.3.3

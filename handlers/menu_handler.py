@@ -84,6 +84,12 @@ class MenuHandler:
         keyboard.row(InlineKeyboardButton("📱 К моим устройствам", callback_data='my_devices'))
         return keyboard
 
+    def create_cancel_menu_devices(self) -> InlineKeyboardMarkup:
+        """Create cancel keyboard for devices."""
+        keyboard = InlineKeyboardMarkup()
+        keyboard.row(InlineKeyboardButton("❌ Отмена", callback_data='my_devices'))
+        return keyboard
+
     @staticmethod
     def create_device_types_menu() -> InlineKeyboardMarkup:
         """Create device types selection keyboard."""
