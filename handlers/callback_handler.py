@@ -41,8 +41,9 @@ class CallbackHandler:
         )
         # Передаем его в DeviceService
         self.device_service = DeviceService(
-            db_manager=db_manager,
-            marzban_service=self.marzban_service
+            db_manager=self.db_manager,
+            marzban_service=self.marzban_service,
+            bot=self.bot
         )
         self.qr_service = qr_service or QRService()
         self.rate_limiter = rate_limiter or RateLimiter()

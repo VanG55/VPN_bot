@@ -121,7 +121,6 @@ class VPNBot:
         self.payment_service = PaymentService(self.db_manager)
         self.backup_service.setup_auto_cleanup(max_backups=5)
         self.marzban_service = MarzbanService(MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD)
-        self.device_service = DeviceService(self.db_manager, self.marzban_service)
 
         # Устанавливаем payment_service для вебхук-сервера
         global payment_service
@@ -137,7 +136,8 @@ class VPNBot:
         # Передаем marzban_service в DeviceService
         self.device_service = DeviceService(
             db_manager=self.db_manager,
-            marzban_service=self.marzban_service
+            marzban_service=self.marzban_service,
+            bot=self.bot
         )
 
         # Инициализация обработчиков
@@ -192,6 +192,9 @@ class VPNBot:
             )
             schedule.every(6).hours.do(
                 self.notification_service.check_marzban_configs
+            )
+            schedule.every(1).minutes.do(
+                self.device_service.check_deactivated_configs
             )
 
             # Запускаем планировщик в отдельном потоке

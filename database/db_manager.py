@@ -432,29 +432,32 @@ class DatabaseManager:
             return None
 
     def get_all_active_devices(self) -> List[Device]:
-        """Get all active devices."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM devices 
-                WHERE is_active = 1 
-                ORDER BY created_at DESC
-            """)
+        """Get all active devices from all users."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM devices 
+                    WHERE is_active = 1
+                """)
 
-            devices = []
-            for row in cursor.fetchall():
-                device = Device(
-                    telegram_id=row['telegram_id'],
-                    device_type=row['device_type'],
-                    config_data=row['config_data'],
-                    is_active=row['is_active'],
-                    created_at=row['created_at'],
-                    expires_at=row['expires_at'],
-                    marzban_username=row['marzban_username'],
-                    id=row['id']
-                )
-                devices.append(device)
-            return devices
+                devices = []
+                for row in cursor.fetchall():
+                    device = Device(
+                        telegram_id=row['telegram_id'],
+                        device_type=row['device_type'],
+                        config_data=row['config_data'],
+                        is_active=row['is_active'],
+                        created_at=row['created_at'],
+                        expires_at=row['expires_at'],
+                        marzban_username=row['marzban_username'],
+                        id=row['id']
+                    )
+                    devices.append(device)
+                return devices
+        except Exception as e:
+            logger.error(f"Error getting all active devices: {e}")
+            return []
 
     def update_device_expiry(self, device_id: int, new_expiry: datetime) -> bool:
         """Update device expiry date."""

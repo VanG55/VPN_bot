@@ -86,8 +86,9 @@ class CommandHandler:
             MARZBAN_PASSWORD
         )
         self.device_service = DeviceService(
-            db_manager=db_manager,
-            marzban_service=self.marzban_service
+            db_manager=self.db_manager,
+            marzban_service=self.marzban_service,
+            bot=self.bot  # Добавляем параметр bot
         )
 
     def register_handlers(self):

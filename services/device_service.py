@@ -1,5 +1,4 @@
 import os
-import logging
 import json
 import qrcode
 from qrcode.constants import ERROR_CORRECT_L
@@ -13,11 +12,15 @@ from config.settings import (
     MARZBAN_PROTOCOLS
 )
 from services.marzban_service import MarzbanService
+from telebot import TeleBot
+import logging
+logger = logging.getLogger('device_service')
 
 class DeviceService:
-    def __init__(self, db_manager: DatabaseManager, marzban_service: MarzbanService):
+    def __init__(self, db_manager: DatabaseManager, marzban_service: MarzbanService, bot: TeleBot):
         self.db_manager = db_manager
         self.marzban = marzban_service
+        self.bot = bot  # Добавьте эту строку
         self.logger = logging.getLogger('device_service')
 
     def format_device_info(self, device: Device) -> Tuple[str, Optional[io.BytesIO]]:
@@ -171,6 +174,27 @@ class DeviceService:
             self.logger.error(f"Error checking if user can add device: {e}")
             return False
 
+    def get_user_status(self, username: str) -> bool:
+        try:
+            user_config = self.marzban.get_user_config(username)
+            return user_config and user_config.get('status') == 'active'
+        except Exception as e:
+            logger.error(f"Error checking user status: {e}")
+            return False
+
+    def check_deactivated_configs(self):
+        try:
+            # Получаем все активные устройства для всех пользователей
+            active_devices = self.db_manager.get_all_active_devices()  # Этот метод нужно будет добавить
+            for device in active_devices:
+                if not self.get_user_status(device.marzban_username):
+                    self.permanently_delete_config(device.marzban_username)
+                    logger.info(f"Config {device.marzban_username} was deactivated by v2iplimit and removed")
+        except Exception as e:
+            logger.error(f"Error checking deactivated configs: {e}")
+
+
+
     def format_config_for_device(self, configs: dict, device_type: str) -> str:
         """Format Marzban config for specific device type."""
         try:
@@ -198,3 +222,32 @@ class DeviceService:
                 os.remove(filename)
         except Exception as e:
             self.logger.error(f"Error removing config file: {e}")
+
+    def permanently_delete_config(self, username: str):
+        try:
+            device = self.db_manager.get_device_by_marzban_username(username)
+            if not device:
+                logger.warning(f"Device not found: {username}")
+                return
+
+            # Удаляем из Marzban
+            if self.marzban.delete_user(username):
+                # Деактивируем в БД
+                self.db_manager.deactivate_device(device.id)
+
+                # Уведомляем пользователя
+                message = (
+                    "🚫 *Доступ заблокирован*\n\n"
+                    "Ваш VPN профиль был заблокирован из-за попытки использования "
+                    "с нескольких устройств одновременно.\n\n"
+                    "Для продолжения работы создайте новый профиль."
+                )
+
+                self.bot.send_message(
+                    device.telegram_id,
+                    message,
+                    parse_mode='Markdown'
+                )
+
+        except Exception as e:
+            logger.error(f"Error permanently deleting config: {e}")
