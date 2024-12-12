@@ -10,6 +10,7 @@ from config.settings import (
     TOKEN, DB_NAME, MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD
 )
 import schedule
+from services.node_manager import NodeManager
 import time
 from services.device_service import DeviceService
 from config.settings import (
@@ -120,18 +121,16 @@ class VPNBot:
         self.rate_limiter = RateLimiter()
         self.payment_service = PaymentService(self.db_manager)
         self.backup_service.setup_auto_cleanup(max_backups=5)
-        self.marzban_service = MarzbanService(MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD)
-
-        # Устанавливаем payment_service для вебхук-сервера
-        global payment_service
-        payment_service = self.payment_service
-
-        # Инициализируем Marzban сервис
+        self.node_manager = NodeManager()
         self.marzban_service = MarzbanService(
             host=MARZBAN_HOST,
             username=MARZBAN_USERNAME,
-            password=MARZBAN_PASSWORD
+            password=MARZBAN_PASSWORD,
+            node_manager=self.node_manager  # Добавляем node_manager
         )
+        # Устанавливаем payment_service для вебхук-сервера
+        global payment_service
+        payment_service = self.payment_service
 
         # Передаем marzban_service в DeviceService
         self.device_service = DeviceService(
@@ -141,12 +140,17 @@ class VPNBot:
         )
 
         # Инициализация обработчиков
-        self.command_handler = CommandHandler(self.bot, self.db_manager)
+        self.command_handler = CommandHandler(
+            bot=self.bot,
+            db_manager=self.db_manager,
+            node_manager=self.node_manager  # Добавляем node_manager
+        )
         self.callback_handler = CallbackHandler(
             bot=self.bot,
             db_manager=self.db_manager,
             qr_service=self.qr_service,
-            rate_limiter=self.rate_limiter
+            rate_limiter=self.rate_limiter,
+            node_manager=self.node_manager  # Добавляем node_manager
         )
 
     def setup(self):

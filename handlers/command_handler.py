@@ -16,6 +16,7 @@ from config.settings import (
     MARZBAN_USERNAME,
     MARZBAN_PASSWORD
 )
+from services.node_manager import  NodeManager
 
 logger = logging.getLogger('command_handler')
 
@@ -72,7 +73,7 @@ class CommandRateLimit:
 
 
 class CommandHandler:
-    def __init__(self, bot: TeleBot, db_manager: DatabaseManager):
+    def __init__(self, bot: TeleBot, db_manager: DatabaseManager, node_manager: NodeManager = None):
         self.bot = bot
         self.db_manager = db_manager
         self.user_service = UserService(db_manager)
@@ -81,9 +82,10 @@ class CommandHandler:
         self.menu_handler = MenuHandler()
         self.rate_limiter = CommandRateLimit()
         self.marzban_service = MarzbanService(
-            MARZBAN_HOST,
-            MARZBAN_USERNAME,
-            MARZBAN_PASSWORD
+            host=MARZBAN_HOST,
+            username=MARZBAN_USERNAME,
+            password=MARZBAN_PASSWORD,
+            node_manager=node_manager
         )
         self.device_service = DeviceService(
             db_manager=self.db_manager,

@@ -1,34 +1,28 @@
-from typing import Optional, Dict, Any
-import requests
 import logging
+import requests
+from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import json
-import logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+
 logger = logging.getLogger('marzban_service')
 
+
 class MarzbanService:
-    def __init__(self, host: str, username: str, password: str):
+    def __init__(self, host: str, username: str, password: str, node_manager):
         self.host = host.rstrip('/')
         self.username = username
         self.password = password
         self.token = None
+        self.node_manager = node_manager
         self.logger = logging.getLogger('marzban_service')
 
     def _get_token(self) -> Optional[str]:
         """Получение токена для API Marzban."""
         try:
-            self.logger.info(f"Getting token from {self.host}/api/admin/token")
             response = requests.post(
                 f"{self.host}/api/admin/token",
                 data={"username": self.username, "password": self.password}
             )
-            self.logger.info(f"Token response status: {response.status_code}")
-            self.logger.info(f"Token response: {response.text}")
-
             if response.status_code == 200:
                 return response.json()["access_token"]
             return None
@@ -42,55 +36,51 @@ class MarzbanService:
             self.token = self._get_token()
         return {"Authorization": f"Bearer {self.token}"}
 
-    def create_user(self, username: str, days: int) -> Optional[Dict[str, Any]]:
-        """Создание пользователя в Marzban."""
+    def create_user(self, username: str, days: int) -> Optional[Dict]:
         try:
-            logger.info(f"Creating Marzban user: {username} for {days} days")
-
-            expire_time = int((datetime.now() + timedelta(days=days)).timestamp())
-
-            data = {
-                "username": username,
-                "expire": expire_time,
-                "data_limit": 0,
-                "proxies": {
-                    "vless": {"flow": ""}
-                }
-            }
-
-            logger.debug(f"Request URL: {self.host}/api/user")
-            logger.debug(f"Request data: {data}")
-            logger.debug(f"Headers: {self._get_headers()}")
-
             response = requests.post(
                 f"{self.host}/api/user",
+                json={
+                    "username": username,
+                    "expire": int((datetime.now() + timedelta(days=days)).timestamp()),
+                    "data_limit": 0,
+                    "proxies": {"vless": {"flow": ""}},
+                    "inbounds": {"vless": ["VLESS TCP REALITY"]},
+                    "limit_ip": 1,
+                    "hosts": {
+                        "VLESS TCP REALITY": [
+                            {"remark": "Marz", "address": "150.241.108.35"},
+                            {"remark": "Marzban2", "address": "150.241.108.166"}
+                        ]
+                    }
+                },
                 headers=self._get_headers(),
-                json=data,
                 verify=False
             )
 
-            logger.info(f"Response status: {response.status_code}")
-            logger.info(f"Response text: {response.text}")
-
             if response.status_code == 200:
-                result = response.json()
-                logger.info(f"Success response: {result}")
-                return result
+                return response.json()
 
-            logger.error(f"Failed to create user: {response.status_code} - {response.text}")
             return None
 
         except Exception as e:
-            logger.error(f"Error creating user: {str(e)}", exc_info=True)
+            logger.error(f"Error creating user: {e}")
             return None
 
-    def get_user_config(self, username: str) -> Optional[Dict[str, Any]]:
+    def get_nodes_health(self) -> Dict[str, Any]:
+        """Получение информации о здоровье всех нод"""
+        return self.node_manager.get_nodes_status()
+
+    def get_user_config(self, username: str) -> Optional[Dict]:
         """Получение конфигурации пользователя."""
         try:
             self.logger.info(f"Getting config for user {username}")
+            self.logger.info(f"Making request to: {self.host}/api/user/{username}")
+
             response = requests.get(
                 f"{self.host}/api/user/{username}",
-                headers=self._get_headers()
+                headers=self._get_headers(),
+                verify=False
             )
 
             self.logger.info(f"Response status: {response.status_code}")
@@ -99,8 +89,9 @@ class MarzbanService:
             if response.status_code == 200:
                 return response.json()
             return None
+
         except Exception as e:
-            self.logger.error(f"Error getting user config: {e}", exc_info=True)
+            self.logger.error(f"Error getting user config: {e}")
             return None
 
     def delete_user(self, username: str) -> bool:
@@ -122,43 +113,11 @@ class MarzbanService:
                 f"{self.host}/api/user/{username}/usage",
                 headers=self._get_headers()
             )
-
             if response.status_code == 200:
                 return response.json()
             return None
         except Exception as e:
             self.logger.error(f"Error getting user usage: {e}")
-            return None
-
-    def get_user_config(self, username: str) -> Optional[Dict[str, Any]]:
-        """Получение конфигурации пользователя."""
-        try:
-            self.logger.info(f"Getting config for user {username}")
-
-            # Убедимся, что username не пустой
-            if not username:
-                self.logger.error("Username is empty")
-                return None
-
-            # Используем тот же порт, что и в основном URL
-            url = f"{self.host}/api/user/{username}"
-            self.logger.info(f"Making request to: {url}")
-
-            response = requests.get(
-                url,
-                headers=self._get_headers(),
-                verify=False  # для тестирования, в продакшене нужно убрать
-            )
-
-            self.logger.info(f"Response status: {response.status_code}")
-            self.logger.info(f"Response text: {response.text}")
-
-            if response.status_code == 200:
-                return response.json()
-            return None
-
-        except Exception as e:
-            self.logger.error(f"Error getting user config: {e}", exc_info=True)
             return None
 
     def reset_user_traffic(self, username: str) -> bool:
@@ -180,7 +139,6 @@ class MarzbanService:
                 f"{self.host}/api/system",
                 headers=self._get_headers()
             )
-
             if response.status_code == 200:
                 return response.json()
             return None
@@ -195,7 +153,6 @@ class MarzbanService:
                 f"{self.host}/api/users",
                 headers=self._get_headers()
             )
-
             if response.status_code == 200:
                 users = response.json()
                 return len([u for u in users if u.get('status') == 'active'])

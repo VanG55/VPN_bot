@@ -45,7 +45,7 @@ class UserService:
 
     @staticmethod
     def _get_devices_word(count: int) -> str:
-        """Get correct form of word 'конфиг' based on count."""
+        """t correct form of word 'конфиг' based on count."""
         if count == 1:
             return 'конфиг'
         return 'конфигов'

@@ -17,7 +17,6 @@ MARZBAN_PROTOCOLS = {
     "MacOS": {"vmess": True, "vless": True, "trojan": False, "shadowsocks": False},
     "Linux": {"vmess": True, "vless": True, "trojan": True, "shadowsocks": True}
 }
-
 # YooKassa Configuration
 YOOKASSA_ACCOUNT_ID = '490714'
 YOOKASSA_SECRET_KEY = 'live_bU6jpk2314izChK8KdS1TAm6tuWQj7ywYbGLau5ab64'

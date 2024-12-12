@@ -23,6 +23,7 @@ from database.models import Device
 import json
 from config.settings import MARZBAN_HOST, MARZBAN_USERNAME, MARZBAN_PASSWORD
 from services.marzban_service import MarzbanService
+from services.node_manager import NodeManager
 
 logger = logging.getLogger('callback_handler')
 
@@ -30,14 +31,15 @@ logger = logging.getLogger('callback_handler')
 class CallbackHandler:
     # In callback_handler.py
     def __init__(self, bot: TeleBot, db_manager: DatabaseManager, qr_service: QRService = None,
-                 rate_limiter: RateLimiter = None):
+                 rate_limiter: RateLimiter = None, node_manager: NodeManager = None):
         self.bot = bot
         self.db_manager = db_manager
         # Создаем экземпляр MarzbanService
         self.marzban_service = MarzbanService(
             host=MARZBAN_HOST,
             username=MARZBAN_USERNAME,
-            password=MARZBAN_PASSWORD
+            password=MARZBAN_PASSWORD,
+            node_manager=node_manager
         )
         # Передаем его в DeviceService
         self.device_service = DeviceService(
@@ -409,7 +411,6 @@ class CallbackHandler:
             )
 
     def handle_show_config(self, call: CallbackQuery):
-        """Показать информацию о конфиге при нажатии на кнопку."""
         try:
             device_id = int(call.data.split('_')[2])
             device = self.db_manager.get_device_by_id(device_id)
@@ -421,7 +422,27 @@ class CallbackHandler:
             if not marzban_config:
                 return self.bot.answer_callback_query(call.id, "Ошибка получения конфигурации")
 
-            vless_link = marzban_config.get('links', [])[0] if marzban_config.get('links') else ''
+            links = marzban_config.get('links', [])
+            if not links:
+                return self.bot.answer_callback_query(call.id, "Нет доступных конфигураций")
+
+            # Получаем оптимальный сервер
+            optimal_server = self.db_manager.get_optimal_server()
+
+            # Получаем server_ip из устройства
+            server_ip = device.server_ip or self.db_manager.get_optimal_server()
+
+            # Находим соответствующую ссылку
+            optimal_link = next(
+                (link for link in links if server_ip in link),
+                links[0]
+            )
+
+            # Определяем имя сервера
+            server_name = "Master" if optimal_server == "150.241.108.35" else "Marzban2"
+
+            # Получаем статистику использования
+            users_count = self.db_manager.get_active_devices_count_by_host(optimal_server)
 
             info_text = (
                 "✅ Конфигурация успешно создана!\n\n"
@@ -432,20 +453,24 @@ class CallbackHandler:
                 f"⌛ Дата истечения: {device.expires_at}\n"
                 f"🌍 Страна: 🇩🇪 Германия\n"
                 f"🔒 Протокол: Vless\n\n"
-                "*Скопируйте ссылку для подключения:*\n"
-                f"`{vless_link}`\n\n"
-                "📱 Отсканируйте QR-код ниже"
+                "*Ссылка для подключения:*\n"
+                f"`{optimal_link}`\n\n"
             )
 
             # Генерируем QR-код
             qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
-            qr.add_data(vless_link)
+            qr.add_data(optimal_link)
             qr.make(fit=True)
             qr_buffer = io.BytesIO()
             qr.make_image().save(qr_buffer, format='PNG')
             qr_buffer.seek(0)
 
-            # Отправляем фото с QR-кодом и информацией
+            # Удаляем предыдущее сообщение
+            self.bot.delete_message(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id
+            )
+
             self.bot.send_photo(
                 call.message.chat.id,
                 qr_buffer,
@@ -670,7 +695,7 @@ class CallbackHandler:
                     f"Ваш баланс: *{user.balance}* руб.\n\n"
                     f"Необходимо пополнить баланс на: *{total_cost - user.balance}* руб."
                 )
-                # Очищаем состояние пользователя перед отправкой сообщения
+
                 if user_id in self.user_states:
                     del self.user_states[user_id]
 
@@ -690,8 +715,29 @@ class CallbackHandler:
 
             if device:
                 marzban_config = self.device_service.marzban.get_user_config(device.marzban_username)
-                vless_link = marzban_config.get('links', [])[0] if marzban_config and marzban_config.get(
-                    'links') else ''
+
+                if not marzban_config:
+                    return
+
+                links = marzban_config.get('links', [])
+                if not links:
+                    return
+
+                # Получаем оптимальный сервер
+                optimal_server = self.db_manager.get_optimal_server()
+
+                # Получаем server_ip из устройства
+                server_ip = device.server_ip or self.db_manager.get_optimal_server()
+
+                # Находим соответствующую ссылку
+                optimal_link = next(
+                    (link for link in links if server_ip in link),
+                    links[0]
+                )
+
+                # Определяем имя сервера и статистику
+                server_name = "Master" if optimal_server == "150.241.108.35" else "Marzban2"
+                users_count = self.db_manager.get_active_devices_count_by_host(optimal_server)
 
                 config_message = (
                     "✅ *Конфигурация успешно создана!*\n\n"
@@ -702,20 +748,18 @@ class CallbackHandler:
                     f"⌛ Дата истечения: {device.expires_at}\n"
                     f"🌍 Страна: 🇩🇪 Германия\n"
                     f"🔒 Протокол: Vless\n\n"
-                    "*Скопируйте ссылку для подключения:*\n"
-                    f"`{vless_link}`\n\n"
-                    "📱 Отсканируйте QR-код выше"
+                    "*Ссылка для подключения:*\n"
+                    f"`{optimal_link}`\n\n"
                 )
 
-                # Генерируем QR-код
+                # Генерируем QR-код для выбранной ссылки
                 qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
-                qr.add_data(vless_link)
+                qr.add_data(optimal_link)
                 qr.make(fit=True)
                 qr_buffer = io.BytesIO()
                 qr.make_image().save(qr_buffer, format='PNG')
                 qr_buffer.seek(0)
 
-                # Отправляем сообщение с QR-кодом
                 self.bot.send_photo(
                     message.chat.id,
                     qr_buffer,
@@ -723,6 +767,9 @@ class CallbackHandler:
                     parse_mode='Markdown',
                     reply_markup=self.menu_handler.create_my_devices_button()
                 )
+
+            else:
+                self.bot.reply_to(message, "❌ Ошибка создания конфигурации")
 
         except ValueError:
             self.bot.reply_to(message, "❌ Пожалуйста, введите корректное число от 1 до 30.")
@@ -852,7 +899,7 @@ class CallbackHandler:
     def handle_referral(self, call: CallbackQuery):
         try:
             user_id = call.from_user.id
-            bot_username = "VangVPN_bot"  # Замените на username вашего бота
+            bot_username = "VangVPN_bot"  # Или из settings
             ref_link = f"https://t.me/{bot_username}?start=ref{user_id}"
 
             stats = self.db_manager.get_referral_stats(user_id)
@@ -862,7 +909,7 @@ class CallbackHandler:
                 "Приглашайте друзей и получайте бонусы:\n"
                 "• Вы получаете Trial конфиг на 2 дня\n"
                 "• Ваш друг получает Trial конфиг на 1 день\n\n"
-                "⬇️ *Ваша реферальная ссылка (нажми, чтобы скопировать):*\n"
+                "⬇️ *Ваша реферальная ссылка:*\n"
                 f"`{ref_link}`\n\n"
                 "🏅 *Статистика:*\n"
                 f"├ Приведено друзей: `{stats['referrals_count']}`\n"

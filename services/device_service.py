@@ -25,12 +25,19 @@ class DeviceService:
 
     def format_device_info(self, device: Device) -> Tuple[str, Optional[io.BytesIO]]:
         try:
+            # Получаем конфигурацию
             marzban_config = self.marzban.get_user_config(device.marzban_username)
             if not marzban_config:
                 return "Ошибка получения информации об устройстве", None
 
+            # Получаем все ссылки
             links = marzban_config.get('links', [])
-            vless_link = next((link for link in links if link.startswith('vless://')), '')
+
+            # Находим нужную ссылку по server_ip устройства
+            optimal_link = next(
+                (link for link in links if device.server_ip in link),
+                links[0]
+            )
 
             info_text = f"""
     ℹ️ *Информация:*
@@ -41,21 +48,18 @@ class DeviceService:
     🌍 Страна: 🇩🇪 Германия
     🔒 Протокол: Vless
 
-    1️⃣ *Скопируйте конфигурацию*
-    Нажмите на ссылку ниже, чтобы скопировать ⬇️
-    `{device.marzban_username}`
-
-    2️⃣ *Скопируйте ссылку для подключения:*
-    `{vless_link}`
+    *Ссылка для подключения:*
+    `{optimal_link}`
     """
 
+            # Генерируем QR-код для выбранной ссылки
             qr = qrcode.QRCode(
                 version=1,
                 error_correction=ERROR_CORRECT_L,
                 box_size=10,
-                border=4,
+                border=4
             )
-            qr.add_data(vless_link)
+            qr.add_data(optimal_link)
             qr.make(fit=True)
 
             qr_buffer = io.BytesIO()
@@ -74,32 +78,41 @@ class DeviceService:
                 return None
 
             # Проверяем достаточно ли денег на балансе для создания конфига
-            total_cost = DEFAULT_PLAN_PRICE * days  # Считаем полную стоимость за все дни
+            total_cost = DEFAULT_PLAN_PRICE * days
             user = self.db_manager.get_user(telegram_id)
 
             if not user or user.balance < total_cost:
-                self.logger.info(f"Insufficient balance: required {total_cost}, available {user.balance if user else 0}")
+                self.logger.info(
+                    f"Insufficient balance: required {total_cost}, available {user.balance if user else 0}")
                 return None
+
+            # Получаем оптимальный сервер для нового устройства
+            optimal_server = self.db_manager.get_optimal_server()
 
             marzban_username = f"vless_{device_type.lower()}_{int(datetime.now().timestamp())}"
             self.logger.info(f"Creating Marzban user: {marzban_username}")
 
-            marzban_user = self.marzban.create_user(marzban_username, days)
+            # Убираем параметр node при вызове create_user
+            marzban_user = self.marzban.create_user(
+                username=marzban_username,
+                days=days
+            )
+
             if not marzban_user:
                 return None
 
             device = Device(
                 telegram_id=telegram_id,
                 device_type=device_type,
-                config_data=json.dumps(marzban_user),  # сохраняем полный ответ от Marzban
+                config_data=json.dumps(marzban_user),
                 created_at=datetime.now(),
                 expires_at=datetime.now() + timedelta(days=days),
-                marzban_username=marzban_username  # важно сохранить это
+                marzban_username=marzban_username,
+                server_ip=optimal_server  # Используем полученный оптимальный сервер
             )
 
             device_id = self.db_manager.add_device(device)
             if device_id:
-                # Списываем полную стоимость за все дни
                 self.db_manager.update_balance(telegram_id, -total_cost)
                 device.id = device_id
                 return device

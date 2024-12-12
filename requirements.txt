@@ -6,3 +6,4 @@ Pillow==10.1.0
 requests==2.31.0
 yookassa==3.4.1
 flask==2.3.3
+redis-5.2.1

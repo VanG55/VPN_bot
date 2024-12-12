@@ -84,20 +84,20 @@ class DatabaseManager:
             ) for row in cursor.fetchall()]
 
     def add_device(self, device: Device) -> int:
-        """Add new device."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO devices 
-                (telegram_id, device_type, config_data, created_at, expires_at, marzban_username)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (telegram_id, device_type, config_data, created_at, expires_at, marzban_username, server_ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 device.telegram_id,
                 device.device_type,
                 device.config_data,
                 device.created_at,
                 device.expires_at,
-                device.marzban_username
+                device.marzban_username,
+                device.server_ip
             ))
             return cursor.lastrowid
 
@@ -570,3 +570,46 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error adding trial config: {e}")
             return None
+
+    def get_active_devices_count_by_host(self, host: str) -> int:
+        """Получение количества активных устройств на сервере"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM devices 
+                WHERE server_ip = ? AND is_active = 1
+            """, (host,))
+            return cursor.fetchone()[0]
+
+    def get_optimal_server(self) -> str:
+        """
+        Определяет оптимальный сервер с учетом активных конфигов
+        Returns:
+            str: IP адрес оптимального сервера
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Получаем количество активных конфигов на каждом сервере
+            cursor.execute("""
+                SELECT server_ip, COUNT(*) as count
+                FROM devices 
+                WHERE is_active = 1 
+                GROUP BY server_ip
+            """)
+
+            server_loads = {}
+            for row in cursor.fetchall():
+                if row[0]:  # проверка на не-NULL server_ip
+                    server_loads[row[0]] = row[1]
+
+            # Если нет данных или равная нагрузка - возвращаем по умолчанию
+            master_count = server_loads.get('150.241.108.35', 0)
+            marzban2_count = server_loads.get('150.241.108.166', 0)
+
+            # Возвращаем сервер с меньшей нагрузкой
+            if master_count <= marzban2_count:
+                return '150.241.108.35'
+            else:
+                return '150.241.108.166'

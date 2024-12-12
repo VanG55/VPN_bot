@@ -31,6 +31,7 @@ class Device:
     created_at: datetime = datetime.now()
     expires_at: Optional[datetime] = None
     marzban_username: str = ""
+    server_ip: str = ""  # Добавляем поле
     id: Optional[int] = None
 
 @dataclass
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS devices (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
     marzban_username TEXT,
+    server_ip TEXT,
     FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
 );
 
