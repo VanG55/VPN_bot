@@ -522,7 +522,40 @@ class CallbackHandler:
         try:
             # Отменяем режим поддержки, если он был активен
             self.support_service.cancel_support_dialog(call.from_user.id)
-            self.handle_update(call)
+
+            # Получаем информацию о пользователе и создаем основное меню
+            user_info = self.user_service.get_user_info(call.from_user.id)
+            text = MESSAGE_TEMPLATES['welcome'].format(**user_info)
+
+            # Создаем клавиатуру основного меню
+            keyboard = self.menu_handler.create_main_menu()
+
+            try:
+                # Пробуем отредактировать текущее сообщение
+                self.bot.edit_message_text(
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            except Exception as edit_error:
+                # Если не получилось отредактировать, удаляем старое и отправляем новое
+                try:
+                    self.bot.delete_message(
+                        chat_id=call.message.chat.id,
+                        message_id=call.message.message_id
+                    )
+                except:
+                    pass
+
+                self.bot.send_message(
+                    call.message.chat.id,
+                    text=text,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+
         except Exception as e:
             logger.error(f"Error returning to main menu: {e}")
             self.bot.answer_callback_query(
