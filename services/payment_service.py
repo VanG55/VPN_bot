@@ -195,10 +195,7 @@ class PaymentService:
             payer_telegram_id = int(payment['metadata']['user_id'])
             amount = float(payment['amount']['value'])
 
-            # Обновляем баланс плательщика
-            self.db_manager.update_balance(payer_telegram_id, amount)
-
-            # Обновляем статус транзакции
+            # Обновляем только статус транзакции
             self.db_manager.update_transaction_status(payment['id'], 'completed')
 
             # Проверяем и обрабатываем реферальный бонус

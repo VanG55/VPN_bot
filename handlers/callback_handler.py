@@ -603,13 +603,6 @@ class CallbackHandler:
             )
 
             if payment_data and payment_data['success']:
-                payment_message = (
-                    "💰 *Пополнение баланса*\n\n"
-                    f"Сумма: *{amount}* руб.\n"
-                    f"Email для чека: {email}\n"
-                    "Для оплаты перейдите по ссылке ниже 👇"
-                )
-
                 keyboard = InlineKeyboardMarkup()
                 keyboard.add(
                     InlineKeyboardButton("💳 Оплатить", url=payment_data['payment_url'])
@@ -618,9 +611,16 @@ class CallbackHandler:
                     InlineKeyboardButton("🔙 Вернуться в меню", callback_data='back_to_menu')
                 )
 
-                self.bot.send_message(
+                # Отправляем GIF и сообщение
+                self.bot.send_animation(
                     message.chat.id,
-                    payment_message,
+                    "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExOW9rMWU2MTRybG4yYTJ5ajI2eDI4YzRjNjZpMHNwam55OXJzcDh2bCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/40KHD3lKSZC4FNysxY/giphy.gif",  # Замените на вашу ссылку из imgur
+                    caption=(
+                        "💰 *Пополнение баланса*\n\n"
+                        f"Сумма: *{amount}* руб.\n"
+                        f"Email для чека: {email}\n"
+                        "Для оплаты перейдите по ссылке ниже 👇"
+                    ),
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )

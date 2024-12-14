@@ -225,10 +225,6 @@ class CommandHandler:
 
             if payment_status and payment_status.get('paid'):
                 logger.info(f"Processing successful payment for user {user_id}")
-                # Обновляем баланс
-                self.db_manager.update_balance(user_id, latest_transaction.amount)
-                # Обновляем статус транзакции
-                self.db_manager.update_transaction_status(latest_transaction.payment_id, 'completed')
 
                 # Отправляем уведомление
                 success_message = (
